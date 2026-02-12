@@ -1,0 +1,87 @@
+.orbit-wrap {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+  background: #0d1016;
+}
+
+.orbit-header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-bottom: 1px solid #263242;
+  background: #141b25;
+}
+
+.orbit-title {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 12px;
+  color: #b9ccdf;
+}
+
+.orbit-middle-actions,
+.orbit-zoom-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.orbit-random-group,
+.orbit-zoom-group {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #3a4a5f;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.orbit-zoom-label {
+  padding: 6px 10px;
+  font-size: 13px;
+  color: #d7dde7;
+}
+
+.orbit-center-btn,
+.orbit-random-btn,
+.orbit-random-mix,
+.orbit-zoom {
+  border: 1px solid #3a4a5f;
+  background: #1a2230;
+  color: #d7dde7;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.orbit-center-btn,
+.orbit-random-btn {
+  border-radius: 999px;
+  padding: 7px 12px;
+}
+
+.orbit-random-mix,
+.orbit-zoom {
+  border: 0;
+  border-left: 1px solid #3a4a5f;
+  padding: 6px 10px;
+}
+
+.orbit-random-btn {
+  border: 0;
+  padding: 7px 12px;
+}
+
+.orbit-body {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.orbit-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

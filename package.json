@@ -1,0 +1,24 @@
+{
+  "name": "faust-orbit-ui",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./faust-orbit-ui.css": "./dist/faust-orbit-ui.css"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json && cp src/faust-orbit-ui.css dist/faust-orbit-ui.css",
+    "demo:serve": "python3 -m http.server 4173 -d ."
+  }
+}
