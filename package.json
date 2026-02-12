@@ -1,8 +1,8 @@
 {
   "name": "faust-orbit-ui",
   "version": "0.1.0",
+  "description": "Orbit-based UI component for Faust-style parameter control, driven by JSON metadata and callbacks.",
   "license": "MIT",
-  "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -21,6 +21,9 @@
     "build": "tsc -p tsconfig.json && cp src/faust-orbit-ui.css dist/faust-orbit-ui.css",
     "demo:serve": "python3 -m http.server 4173 -d .",
     "test": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "typescript": "^5.3.0"
