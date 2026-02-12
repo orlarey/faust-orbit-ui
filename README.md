@@ -1,6 +1,38 @@
 # faust-orbit-ui
 
-Orbit-style UI renderer for Faust-like UI JSON.
+Orbit-based UI component for Faust-style parameter control, driven by JSON metadata and callbacks.
+
+## Install
+
+```bash
+npm install
+```
+
+## Build
+
+```bash
+npm run build
+```
+
+## Test
+
+Current test is a build smoke test:
+
+```bash
+npm test
+```
+
+## Demo
+
+Run demo server from repository root on `http://localhost:4173`:
+
+```bash
+npm run demo:serve
+```
+
+Then open:
+
+- `http://localhost:4173/demo/index.html`
 
 ## CSS
 
@@ -14,28 +46,8 @@ In browser demos without bundler, you can include:
 <link rel="stylesheet" href="../dist/faust-orbit-ui.css" />
 ```
 
-## Development
+## Repository layout
 
-Build package:
-
-```bash
-npm --prefix packages/faust-orbit-ui run build
-```
-
-Run demo server (package root) on `http://localhost:4173`:
-
-```bash
-npm --prefix packages/faust-orbit-ui run demo:serve
-```
-
-Then open:
-
-- `http://localhost:4173/demo/index.html`
-
-## Demo layout convention
-
-- `demo/`: browser demo app (`index.html`, `main.js`, sample `ui.json`)
 - `src/`: package source
-- `dist/`: built output
-
-This keeps examples close to the package while keeping production code in `src/`.
+- `dist/`: build output
+- `demo/`: browser demo app (`index.html`, `main.js`, sample `ui.json`)

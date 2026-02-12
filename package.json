@@ -18,7 +18,11 @@
     "dist"
   ],
   "scripts": {
-    "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json && cp src/faust-orbit-ui.css dist/faust-orbit-ui.css",
-    "demo:serve": "python3 -m http.server 4173 -d ."
+    "build": "tsc -p tsconfig.json && cp src/faust-orbit-ui.css dist/faust-orbit-ui.css",
+    "demo:serve": "python3 -m http.server 4173 -d .",
+    "test": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
   }
 }
