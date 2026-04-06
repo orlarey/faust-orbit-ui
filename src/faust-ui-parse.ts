@@ -11,6 +11,7 @@ export type FaustUIItem = {
   min: number;
   max: number;
   step: number;
+  unit?: string;
 };
 
 // AST node for Faust UI language (group hierarchy + control leaves).
@@ -83,6 +84,17 @@ function parseControlNode(node: FaustUiRawNode, type: FaustWidgetType): FaustUiA
       ? node.label
       : rawPath.split('/').filter(Boolean).pop() || rawPath;
 
+  // Extract optional unit from widget metadata array.
+  let unit: string | undefined;
+  if (Array.isArray(node.meta)) {
+    for (const entry of node.meta) {
+      if (isRecord(entry) && typeof entry.unit === 'string') {
+        unit = entry.unit;
+        break;
+      }
+    }
+  }
+
   return {
     kind: 'control',
     item: {
@@ -91,7 +103,8 @@ function parseControlNode(node: FaustUiRawNode, type: FaustWidgetType): FaustUiA
       label,
       min,
       max,
-      step
+      step,
+      ...(unit !== undefined ? { unit } : {})
     }
   };
 }

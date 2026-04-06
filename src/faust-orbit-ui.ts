@@ -16,6 +16,7 @@ export type OrbitControl = {
   min: number; // Minimum parameter value.
   max: number; // Maximum parameter value.
   step: number; // Quantization step for continuous widgets.
+  unit?: string; // Optional unit label from Faust metadata (ex: "Hz", "dB").
   color: string; // Visual color assigned to this control point.
   x: number; // Current x position in Orbit world coordinates.
   y: number; // Current y position in Orbit world coordinates.
@@ -126,6 +127,7 @@ function cloneState(state: OrbitState): OrbitState {
           min: c.min,
           max: c.max,
           step: c.step,
+          ...(c.unit ? { unit: c.unit } : {}),
           color: c.color,
           x: c.x,
           y: c.y,
@@ -185,10 +187,12 @@ export class FaustOrbitUI extends FaustUICore {
   private tooltips: NonNullable<FaustOrbitUIOptions['tooltips']>; // Optional tooltip strings injected by host app.
 
   private state: OrbitState; // Internal authoritative Orbit state.
+  private activePath: Path | null; // Path of the last-touched control shown in the detail panel.
 
   private body: HTMLDivElement; // Root scrollable body containing the canvas.
   private canvas: HTMLCanvasElement; // Drawing canvas for Orbit UI.
   private ctx: CanvasRenderingContext2D; // 2D rendering context of the Orbit canvas.
+  private detailEl: HTMLDivElement; // Detail panel container below the canvas.
   private zoomSelect: HTMLSelectElement; // Zoom selector element in Orbit toolbar.
   private centerButton: HTMLButtonElement; // Center action button in Orbit toolbar.
   private randomButton: HTMLButtonElement; // Random action button in Orbit toolbar.
@@ -226,6 +230,7 @@ export class FaustOrbitUI extends FaustUICore {
     this.gridOrigin = { x: 0.5, y: 0.5 };
     this.initialOuterRadius = null;
     this.hoverHint = null;
+    this.activePath = null;
     this.tooltips = options.tooltips || {};
 
     this.state = {
@@ -268,17 +273,22 @@ export class FaustOrbitUI extends FaustUICore {
         <div class="orbit-body">
           <canvas class="orbit-canvas"></canvas>
         </div>
+        <div class="orbit-detail">
+          <span class="orbit-detail-empty">Select a control</span>
+        </div>
       </div>
     `;
     this.root.tabIndex = 0;
 
     const body = this.root.querySelector('.orbit-body');
     const canvas = this.root.querySelector('.orbit-canvas');
-    if (!(body instanceof HTMLDivElement) || !(canvas instanceof HTMLCanvasElement)) {
+    const detailEl = this.root.querySelector('.orbit-detail');
+    if (!(body instanceof HTMLDivElement) || !(canvas instanceof HTMLCanvasElement) || !(detailEl instanceof HTMLDivElement)) {
       throw new Error('FaustOrbitUI: invalid orbit DOM');
     }
     this.body = body;
     this.canvas = canvas;
+    this.detailEl = detailEl;
     const ctx = this.canvas.getContext('2d');
     const zoomSelect = this.root.querySelector('.orbit-zoom');
     const centerButton = this.root.querySelector('.orbit-center-btn');
@@ -340,6 +350,7 @@ export class FaustOrbitUI extends FaustUICore {
     this._constrainControlPositions();
     this._requestRender();
     this._requestStateEmit();
+    this._updateDetailPanel();
   }
 
   // Validates unknown input, normalizes it, and applies the resulting Orbit state.
@@ -389,6 +400,8 @@ export class FaustOrbitUI extends FaustUICore {
         y = next.center.y + Math.sin(angle) * distance;
       }
 
+      const keepUnit = previous && previous.unit ? previous.unit : control.unit;
+
       next.controls[control.path] = {
         path: control.path,
         type: control.type,
@@ -396,6 +409,7 @@ export class FaustOrbitUI extends FaustUICore {
         min: control.min,
         max: control.max,
         step: keepStep,
+        ...(keepUnit ? { unit: keepUnit } : {}),
         color: keepColor,
         x,
         y,
@@ -423,6 +437,7 @@ export class FaustOrbitUI extends FaustUICore {
     if (!path || !Number.isFinite(value)) return;
     const control = this.state.controls[path];
     this.paramValues[path] = value;
+    if (path === this.activePath) this._updateDetailPanel();
     // During any local drag, point positions are user-authoritative.
     if (this.pointer) return;
     if (!control || !control.enabled) return;
@@ -650,10 +665,27 @@ export class FaustOrbitUI extends FaustUICore {
   _installKeyboardHandler(): void {
     this.keyHandler = (event: KeyboardEvent) => {
       if (!event || typeof event.key !== 'string') return;
-      if (event.key.toLowerCase() !== 'r') return;
-      event.preventDefault();
-      const c = this.randomMixSelect ? Number(this.randomMixSelect.value) : 1;
-      this.random(c);
+
+      // Ignore keyboard shortcuts when a detail panel input has focus.
+      const target = event.target;
+      if (target instanceof HTMLInputElement && target.closest('.orbit-detail')) return;
+
+      if (event.key.toLowerCase() === 'r') {
+        event.preventDefault();
+        const c = this.randomMixSelect ? Number(this.randomMixSelect.value) : 1;
+        this.random(c);
+        return;
+      }
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        this._navigateControl(event.key === 'ArrowRight' ? 1 : -1);
+        return;
+      }
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault();
+        this._stepActiveControl(event.key === 'ArrowUp' ? 1 : -1);
+        return;
+      }
     };
     this.root.addEventListener('keydown', this.keyHandler);
   }
@@ -687,6 +719,9 @@ export class FaustOrbitUI extends FaustUICore {
       this.canvas.setPointerCapture(event.pointerId);
       this.pointer = { pointerId: event.pointerId, mode: hit.mode, path: hit.path || null };
       this.hoverHint = null;
+      if (hit.mode === 'slider' && hit.path) {
+        this._setActivePath(hit.path);
+      }
       if (this.onInteractionStart) {
         try {
           this.onInteractionStart();
@@ -850,6 +885,9 @@ export class FaustOrbitUI extends FaustUICore {
         isFaustInputWidgetType(raw.type)
           ? raw.type
           : (step >= 1 && min === 0 && max === 1 ? 'checkbox' : 'hslider');
+      const unit = typeof (raw as Record<string, unknown>).unit === 'string'
+        ? (raw as Record<string, unknown>).unit as string
+        : undefined;
       normalized.controls[path] = {
         path,
         type: inferredType,
@@ -857,6 +895,7 @@ export class FaustOrbitUI extends FaustUICore {
         min,
         max,
         step,
+        ...(unit ? { unit } : {}),
         color,
         x: clamp(Number(raw.x) || normalized.center.x, 0, width),
         y: clamp(Number(raw.y) || normalized.center.y, 0, height),
@@ -1060,6 +1099,7 @@ export class FaustOrbitUI extends FaustUICore {
     } catch {
       // ignore
     }
+    if (control.path === this.activePath) this._updateDetailPanel();
   }
 
   // Emits values for all controls (used when geometry changes globally).
@@ -1202,6 +1242,221 @@ export class FaustOrbitUI extends FaustUICore {
         ctx.fillText(text, boxX + padX, boxY + boxH - padY - 2);
       }
     }
+  }
+
+  // Sets the active control path and refreshes the detail panel.
+  _setActivePath(path: Path | null): void {
+    if (path === this.activePath) return;
+    this.activePath = path;
+    this._updateDetailPanel();
+  }
+
+  // Navigates to the next/previous control in the ordered control list.
+  _navigateControl(direction: 1 | -1): void {
+    const paths = this.controlOrder.length > 0
+      ? this.controlOrder
+      : Object.keys(this.state.controls);
+    if (paths.length === 0) return;
+    if (!this.activePath || !paths.includes(this.activePath)) {
+      this._setActivePath(paths[0]);
+      return;
+    }
+    const idx = paths.indexOf(this.activePath);
+    const next = (idx + direction + paths.length) % paths.length;
+    this._setActivePath(paths[next]);
+  }
+
+  // Increments or decrements the active control value by one step.
+  _stepActiveControl(direction: 1 | -1): void {
+    if (!this.activePath) return;
+    const control = this.state.controls[this.activePath];
+    if (!control || !control.enabled) return;
+    if (control.type === 'button') return;
+
+    const current = Number.isFinite(this.paramValues[control.path])
+      ? this.paramValues[control.path]
+      : this._valueFromPosition(control, control.x, control.y);
+    const step = control.step > 0 ? control.step : (control.max - control.min) / 100;
+    const next = clamp(current + direction * step, control.min, control.max);
+    this._applyDetailValue(control, next);
+  }
+
+  // Applies a value from the detail panel back to the orbit and host.
+  private _applyDetailValue(control: OrbitControl, value: number): void {
+    const clamped = clamp(value, control.min, control.max);
+    const p = this._positionFromValue(control.path, clamped);
+    if (!p) return;
+    control.x = p.x;
+    control.y = p.y;
+    this.paramValues[control.path] = clamped;
+    try {
+      this.paramChangeByUI(control.path, clamped);
+    } catch {
+      // ignore
+    }
+    this._requestRender();
+    this._requestStateEmit();
+    this._updateDetailPanel();
+  }
+
+  // Rebuilds the detail panel DOM for the currently active control.
+  _updateDetailPanel(): void {
+    if (!this.detailEl) return;
+
+    if (!this.activePath) {
+      this.detailEl.innerHTML = '<span class="orbit-detail-empty">Select a control</span>';
+      return;
+    }
+
+    const control = this.state.controls[this.activePath];
+    if (!control) {
+      this.detailEl.innerHTML = '<span class="orbit-detail-empty">Select a control</span>';
+      this.activePath = null;
+      return;
+    }
+
+    const value = Number.isFinite(this.paramValues[control.path])
+      ? this.paramValues[control.path]
+      : this._valueFromPosition(control, control.x, control.y);
+
+    // If an input in the detail panel is being interacted with, update values in place
+    // instead of rebuilding the DOM (which would destroy pointer capture on the range thumb).
+    const existingValueInput = this.detailEl.querySelector('.orbit-detail-value');
+    const existingRangeInput = this.detailEl.querySelector('.orbit-detail-range');
+    if (existingValueInput instanceof HTMLInputElement || existingRangeInput instanceof HTMLInputElement) {
+      const isFocused = document.activeElement === existingValueInput || document.activeElement === existingRangeInput;
+      if (isFocused) {
+        if (existingRangeInput instanceof HTMLInputElement) existingRangeInput.value = String(value);
+        if (existingValueInput instanceof HTMLInputElement && document.activeElement !== existingValueInput) {
+          existingValueInput.value = this._formatValue(value, control.step, control.unit);
+        }
+        return;
+      }
+    }
+
+    if (control.type === 'button') {
+      this.detailEl.innerHTML = `
+        <div class="orbit-detail-label">
+          <span class="orbit-detail-color" style="background:${control.color}"></span>
+          <span class="orbit-detail-name">${control.label}</span>
+        </div>
+        <div class="orbit-detail-button-wrap">
+          <button type="button" class="orbit-detail-btn">Trigger</button>
+        </div>`;
+      const btn = this.detailEl.querySelector('.orbit-detail-btn');
+      if (btn) {
+        btn.addEventListener('pointerdown', () => {
+          this._applyDetailValue(control, 1);
+          (btn as HTMLElement).classList.add('orbit-detail-btn--active');
+        });
+        btn.addEventListener('pointerup', () => {
+          this._applyDetailValue(control, 0);
+          (btn as HTMLElement).classList.remove('orbit-detail-btn--active');
+        });
+        btn.addEventListener('pointerleave', () => {
+          this._applyDetailValue(control, 0);
+          (btn as HTMLElement).classList.remove('orbit-detail-btn--active');
+        });
+      }
+      return;
+    }
+
+    if (control.type === 'checkbox') {
+      const checked = Math.round(value) === 1;
+      this.detailEl.innerHTML = `
+        <div class="orbit-detail-label">
+          <span class="orbit-detail-color" style="background:${control.color}"></span>
+          <span class="orbit-detail-name">${control.label}</span>
+        </div>
+        <div class="orbit-detail-button-wrap">
+          <input type="checkbox" class="orbit-detail-checkbox" ${checked ? 'checked' : ''}>
+        </div>`;
+      const cb = this.detailEl.querySelector('.orbit-detail-checkbox');
+      if (cb instanceof HTMLInputElement) {
+        cb.addEventListener('change', () => {
+          this._applyDetailValue(control, cb.checked ? 1 : 0);
+        });
+      }
+      return;
+    }
+
+    // Slider-type controls (hslider, vslider, nentry).
+    const displayValue = this._formatValue(value, control.step, control.unit);
+    this.detailEl.innerHTML = `
+      <div class="orbit-detail-label">
+        <span class="orbit-detail-color" style="background:${control.color}"></span>
+        <span class="orbit-detail-name">${control.label}</span>
+      </div>
+      <div class="orbit-detail-slider-wrap">
+        <input type="text" class="orbit-detail-value" value="${displayValue}">
+        <input type="range" class="orbit-detail-range"
+               min="${control.min}" max="${control.max}" step="${control.step || 'any'}"
+               value="${value}">
+        <span class="orbit-detail-bound">${this._formatValue(control.max, control.step, control.unit)}</span>
+      </div>`;
+
+    const rangeInput = this.detailEl.querySelector('.orbit-detail-range');
+    const valueInput = this.detailEl.querySelector('.orbit-detail-value');
+
+    if (rangeInput instanceof HTMLInputElement) {
+      rangeInput.addEventListener('input', () => {
+        const v = Number(rangeInput.value);
+        if (!Number.isFinite(v)) return;
+        // Update orbit position and host callback without rebuilding the detail DOM,
+        // so the range thumb keeps pointer capture during drag.
+        const clamped = clamp(v, control.min, control.max);
+        const p = this._positionFromValue(control.path, clamped);
+        if (!p) return;
+        control.x = p.x;
+        control.y = p.y;
+        this.paramValues[control.path] = clamped;
+        try {
+          this.paramChangeByUI(control.path, clamped);
+        } catch {
+          // ignore
+        }
+        if (valueInput instanceof HTMLInputElement) {
+          valueInput.value = this._formatValue(clamped, control.step, control.unit);
+        }
+        this._requestRender();
+        this._requestStateEmit();
+      });
+    }
+
+    if (valueInput instanceof HTMLInputElement) {
+      valueInput.addEventListener('keydown', (event: KeyboardEvent) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          const v = parseFloat(valueInput.value);
+          if (Number.isFinite(v)) {
+            this._applyDetailValue(control, v);
+          } else {
+            this._updateDetailPanel();
+          }
+          valueInput.blur();
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          this._updateDetailPanel();
+          valueInput.blur();
+        }
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+          event.preventDefault();
+          event.stopPropagation();
+          const step = control.step > 0 ? control.step : (control.max - control.min) / 100;
+          const current = parseFloat(valueInput.value);
+          if (!Number.isFinite(current)) return;
+          const next = clamp(current + (event.key === 'ArrowUp' ? step : -step), control.min, control.max);
+          this._applyDetailValue(control, next);
+        }
+      });
+    }
+  }
+
+  // Formats a numeric value for display in the detail panel, with optional unit suffix.
+  private _formatValue(value: number, step: number, unit?: string): string {
+    const num = (step >= 1 || step <= 0) ? String(Math.round(value)) : value.toFixed(Math.max(0, Math.ceil(-Math.log10(step))));
+    return unit ? `${num} ${unit}` : num;
   }
 
   // Logs non-fatal Orbit warnings without interrupting UI.

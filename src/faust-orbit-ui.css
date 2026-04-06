@@ -1,6 +1,6 @@
 .orbit-wrap {
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto 1fr auto;
   height: 100%;
   background: #0d1016;
 }
@@ -84,4 +84,143 @@
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* ── Detail panel (bottom bar for last-touched control) ── */
+
+.orbit-detail {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 12px;
+  border-top: 1px solid #263242;
+  background: #141b25;
+  overflow: hidden;
+}
+
+.orbit-detail-empty {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: #556575;
+  text-align: center;
+  user-select: none;
+}
+
+.orbit-detail-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.orbit-detail-color {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.orbit-detail-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #b9ccdf;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.orbit-detail-slider-wrap {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.orbit-detail-value {
+  width: 72px;
+  padding: 3px 6px;
+  border: 1px solid #3a4a5f;
+  border-radius: 4px;
+  background: #1a2230;
+  color: #d7dde7;
+  font-size: 12px;
+  font-family: inherit;
+  text-align: right;
+  outline: none;
+}
+
+.orbit-detail-value:focus {
+  border-color: #5a8abf;
+}
+
+.orbit-detail-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: #263242;
+  outline: none;
+  cursor: pointer;
+}
+
+.orbit-detail-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #d7dde7;
+  border: 2px solid #0d1016;
+  cursor: pointer;
+}
+
+.orbit-detail-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #d7dde7;
+  border: 2px solid #0d1016;
+  cursor: pointer;
+}
+
+.orbit-detail-bound {
+  font-size: 11px;
+  color: #556575;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.orbit-detail-button-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.orbit-detail-btn {
+  padding: 5px 16px;
+  border: 1px solid #3a4a5f;
+  border-radius: 4px;
+  background: #1a2230;
+  color: #d7dde7;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  user-select: none;
+}
+
+.orbit-detail-btn:active,
+.orbit-detail-btn.orbit-detail-btn--active {
+  background: #2a3a50;
+  border-color: #5a8abf;
+}
+
+.orbit-detail-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: #5a8abf;
+  cursor: pointer;
 }
