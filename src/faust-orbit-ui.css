@@ -193,7 +193,14 @@
   user-select: none;
 }
 
+.orbit-detail:has(.orbit-detail-button-wrap) .orbit-detail-label {
+  grid-row: 1;
+  grid-column: 1 / -1;
+}
+
 .orbit-detail-button-wrap {
+  grid-row: 1;
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   justify-content: center;

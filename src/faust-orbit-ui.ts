@@ -686,8 +686,20 @@ export class FaustOrbitUI extends FaustUICore {
         this._stepActiveControl(event.key === 'ArrowUp' ? 1 : -1);
         return;
       }
+      if (event.key === ' ') {
+        event.preventDefault();
+        this._spaceActiveControl(true);
+        return;
+      }
     };
     this.root.addEventListener('keydown', this.keyHandler);
+
+    this.root.addEventListener('keyup', (event: KeyboardEvent) => {
+      if (event.key === ' ') {
+        event.preventDefault();
+        this._spaceActiveControl(false);
+      }
+    });
   }
 
   // Installs a resize observer and performs initial canvas sizing.
@@ -1281,6 +1293,42 @@ export class FaustOrbitUI extends FaustUICore {
     this._applyDetailValue(control, next);
   }
 
+  // Handles Space key for button (press/release) and checkbox (toggle on down).
+  _spaceActiveControl(down: boolean): void {
+    if (!this.activePath) return;
+    const control = this.state.controls[this.activePath];
+    if (!control) return;
+
+    if (control.type === 'button') {
+      this._applyDetailValue(control, down ? 1 : 0);
+      if (down) {
+        const b = this.detailEl.querySelector('.orbit-detail-btn') as HTMLElement | null;
+        if (b) {
+          b.style.borderColor = control.color;
+          b.style.background = control.color;
+          b.style.color = '#0d1016';
+        }
+      }
+      return;
+    }
+
+    if (control.type === 'checkbox') {
+      if (down) {
+        // Visual feedback on press: highlight border with control color.
+        const b = this.detailEl.querySelector('.orbit-detail-btn') as HTMLElement | null;
+        if (b) b.style.borderColor = control.color;
+      } else {
+        // Toggle on release.
+        const current = Math.round(
+          Number.isFinite(this.paramValues[control.path])
+            ? this.paramValues[control.path]
+            : this._valueFromPosition(control, control.x, control.y)
+        );
+        this._applyDetailValue(control, current === 1 ? 0 : 1);
+      }
+    }
+  }
+
   // Applies a value from the detail panel back to the orbit and host.
   private _applyDetailValue(control: OrbitControl, value: number): void {
     const clamped = clamp(value, control.min, control.max);
@@ -1343,19 +1391,24 @@ export class FaustOrbitUI extends FaustUICore {
         <div class="orbit-detail-button-wrap">
           <button type="button" class="orbit-detail-btn">Trigger</button>
         </div>`;
-      const btn = this.detailEl.querySelector('.orbit-detail-btn');
+      const btn = this.detailEl.querySelector('.orbit-detail-btn') as HTMLElement | null;
       if (btn) {
+        const styleBtn = (el: HTMLElement, active: boolean) => {
+          el.style.borderColor = active ? control.color : '';
+          el.style.background = active ? control.color : '';
+          el.style.color = active ? '#0d1016' : '';
+        };
         btn.addEventListener('pointerdown', () => {
           this._applyDetailValue(control, 1);
-          (btn as HTMLElement).classList.add('orbit-detail-btn--active');
+          // _applyDetailValue rebuilds the DOM, so re-query the new button.
+          const b = this.detailEl.querySelector('.orbit-detail-btn') as HTMLElement | null;
+          if (b) styleBtn(b, true);
         });
         btn.addEventListener('pointerup', () => {
           this._applyDetailValue(control, 0);
-          (btn as HTMLElement).classList.remove('orbit-detail-btn--active');
         });
         btn.addEventListener('pointerleave', () => {
           this._applyDetailValue(control, 0);
-          (btn as HTMLElement).classList.remove('orbit-detail-btn--active');
         });
       }
       return;
@@ -1369,12 +1422,17 @@ export class FaustOrbitUI extends FaustUICore {
           <span class="orbit-detail-name">${control.label}</span>
         </div>
         <div class="orbit-detail-button-wrap">
-          <input type="checkbox" class="orbit-detail-checkbox" ${checked ? 'checked' : ''}>
+          <button type="button" class="orbit-detail-btn">${control.label}</button>
         </div>`;
-      const cb = this.detailEl.querySelector('.orbit-detail-checkbox');
-      if (cb instanceof HTMLInputElement) {
-        cb.addEventListener('change', () => {
-          this._applyDetailValue(control, cb.checked ? 1 : 0);
+      const btn = this.detailEl.querySelector('.orbit-detail-btn') as HTMLElement | null;
+      if (btn && checked) {
+        btn.style.borderColor = control.color;
+        btn.style.background = control.color;
+        btn.style.color = '#0d1016';
+      }
+      if (btn) {
+        btn.addEventListener('click', () => {
+          this._applyDetailValue(control, checked ? 0 : 1);
         });
       }
       return;
@@ -1424,21 +1482,37 @@ export class FaustOrbitUI extends FaustUICore {
     }
 
     if (valueInput instanceof HTMLInputElement) {
+      // On focus, strip the unit to expose only the raw number for editing.
+      valueInput.addEventListener('focus', () => {
+        const v = parseFloat(valueInput.value);
+        if (Number.isFinite(v)) {
+          valueInput.value = this._formatValue(v, control.step);
+        }
+        valueInput.select();
+      });
+
+      // On blur, clamp and restore display with unit.
+      valueInput.addEventListener('blur', () => {
+        const v = parseFloat(valueInput.value);
+        if (Number.isFinite(v)) {
+          this._applyDetailValue(control, clamp(v, control.min, control.max));
+        } else {
+          this._updateDetailPanel();
+        }
+      });
+
+      // Filter input: only allow digits, dot, and minus sign.
       valueInput.addEventListener('keydown', (event: KeyboardEvent) => {
         if (event.key === 'Enter') {
           event.preventDefault();
-          const v = parseFloat(valueInput.value);
-          if (Number.isFinite(v)) {
-            this._applyDetailValue(control, v);
-          } else {
-            this._updateDetailPanel();
-          }
           valueInput.blur();
+          return;
         }
         if (event.key === 'Escape') {
           event.preventDefault();
           this._updateDetailPanel();
           valueInput.blur();
+          return;
         }
         if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
           event.preventDefault();
@@ -1447,8 +1521,18 @@ export class FaustOrbitUI extends FaustUICore {
           const current = parseFloat(valueInput.value);
           if (!Number.isFinite(current)) return;
           const next = clamp(current + (event.key === 'ArrowUp' ? step : -step), control.min, control.max);
+          valueInput.value = this._formatValue(next, control.step);
           this._applyDetailValue(control, next);
+          return;
         }
+        // Allow navigation and editing keys.
+        if (event.key === 'Tab' || event.key === 'Backspace' || event.key === 'Delete'
+          || event.key === 'ArrowLeft' || event.key === 'ArrowRight'
+          || event.key === 'Home' || event.key === 'End'
+          || event.ctrlKey || event.metaKey) return;
+        // Allow digits, dot, minus.
+        if (/^[0-9.\-]$/.test(event.key)) return;
+        event.preventDefault();
       });
     }
   }
