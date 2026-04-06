@@ -121,7 +121,37 @@ Input should follow the common Faust UI metadata shape:
 - active widgets: `hslider`, `vslider`, `nentry`, `button`, `checkbox`
 - passive widgets are parsed but not interactive controls in Orbit.
 
+Widgets may include a `meta` array with unit information:
+
+```json
+{ "type": "hslider", "label": "frequency", "address": "/synth/frequency",
+  "min": 20, "max": 2000, "step": 1, "meta": [{ "unit": "Hz" }] }
+```
+
+The unit is displayed in the detail panel value field (e.g. `440 Hz`).
+
 Unknown nodes are ignored. Invalid top-level input (not an array) throws.
+
+## Detail Panel
+
+A fixed-height bar below the Orbit canvas shows the last-touched control with a conventional editing interface:
+
+- **Sliders** (`hslider`, `vslider`, `nentry`): editable value field + range slider. The value field shows the unit suffix (e.g. `440 Hz`) when present, strips it on focus for editing, and clamps to min/max on blur. Only numeric characters and decimal point are accepted.
+- **Buttons**: a trigger button with color feedback on press/release.
+- **Checkboxes**: a toggle button that stays highlighted when active, using the control's color.
+
+### Keyboard Shortcuts
+
+| Key | Action |
+| ----- | -------- |
+| `Arrow Left` / `Arrow Right` | Navigate between controls |
+| `Arrow Up` / `Arrow Down` | Increment / decrement value by one step |
+| `Space` | Trigger button (press/release) or toggle checkbox (on release) |
+| `R` | Randomize controls |
+| `Enter` | Confirm value input |
+| `Escape` | Cancel value input |
+
+When the value input field is focused, `Arrow Up` / `Arrow Down` step the value within the field, and `Arrow Left` / `Arrow Right` move the text cursor normally.
 
 ## CSS
 

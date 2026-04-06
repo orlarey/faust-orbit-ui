@@ -231,3 +231,19 @@
   accent-color: #5a8abf;
   cursor: pointer;
 }
+
+.orbit-detail-select {
+  padding: 5px 10px;
+  border: 1px solid #3a4a5f;
+  border-radius: 4px;
+  background: #1a2230;
+  color: #d7dde7;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+}
+
+.orbit-detail-select:focus {
+  border-color: #5a8abf;
+}

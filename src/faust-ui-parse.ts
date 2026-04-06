@@ -3,6 +3,9 @@ export type FaustPassiveWidgetType = 'hbargraph' | 'vbargraph';
 export type FaustWidgetType = FaustInputWidgetType | FaustPassiveWidgetType;
 export type FaustGroupType = 'vgroup' | 'hgroup' | 'tgroup';
 
+// A single entry in a Faust menu-style widget.
+export type FaustMenuEntry = { label: string; value: number };
+
 // Normalized flat UI item used by concrete Faust UI renderers.
 export type FaustUIItem = {
   path: string;
@@ -12,6 +15,8 @@ export type FaustUIItem = {
   max: number;
   step: number;
   unit?: string;
+  menu?: FaustMenuEntry[];
+  menuStyle?: 'menu' | 'radio';
 };
 
 // AST node for Faust UI language (group hierarchy + control leaves).
@@ -57,6 +62,19 @@ function isFaustGroupType(type: unknown): type is FaustGroupType {
   return type === 'vgroup' || type === 'hgroup' || type === 'tgroup';
 }
 
+// Parses a Faust menu/radio style string like "menu{'Noise':0;'Sawtooth':1;'Square':2}".
+function parseMenuStyle(style: string): { entries: FaustMenuEntry[]; menuStyle: 'menu' | 'radio' } | undefined {
+  const match = style.match(/^(menu|radio)\s*\{(.+)\}$/);
+  if (!match) return undefined;
+  const menuStyle = match[1] as 'menu' | 'radio';
+  const entries: FaustMenuEntry[] = [];
+  for (const pair of match[2].split(';')) {
+    const m = pair.match(/^\s*'([^']+)'\s*:\s*(-?[\d.]+)\s*$/);
+    if (m) entries.push({ label: m[1], value: Number(m[2]) });
+  }
+  return entries.length > 0 ? { entries, menuStyle } : undefined;
+}
+
 function parseControlNode(node: FaustUiRawNode, type: FaustWidgetType): FaustUiAstControlNode | null {
   const rawPath =
     typeof node.address === 'string'
@@ -84,13 +102,22 @@ function parseControlNode(node: FaustUiRawNode, type: FaustWidgetType): FaustUiA
       ? node.label
       : rawPath.split('/').filter(Boolean).pop() || rawPath;
 
-  // Extract optional unit from widget metadata array.
+  // Extract optional unit and menu style from widget metadata array.
   let unit: string | undefined;
+  let menu: FaustMenuEntry[] | undefined;
+  let menuStyle: 'menu' | 'radio' | undefined;
   if (Array.isArray(node.meta)) {
     for (const entry of node.meta) {
-      if (isRecord(entry) && typeof entry.unit === 'string') {
+      if (!isRecord(entry)) continue;
+      if (typeof entry.unit === 'string') {
         unit = entry.unit;
-        break;
+      }
+      if (typeof entry.style === 'string') {
+        const parsed = parseMenuStyle(entry.style);
+        if (parsed) {
+          menu = parsed.entries;
+          menuStyle = parsed.menuStyle;
+        }
       }
     }
   }
@@ -104,7 +131,9 @@ function parseControlNode(node: FaustUiRawNode, type: FaustWidgetType): FaustUiA
       min,
       max,
       step,
-      ...(unit !== undefined ? { unit } : {})
+      ...(unit !== undefined ? { unit } : {}),
+      ...(menu !== undefined ? { menu } : {}),
+      ...(menuStyle !== undefined ? { menuStyle } : {})
     }
   };
 }

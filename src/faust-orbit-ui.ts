@@ -3,7 +3,8 @@ import {
   isFaustInputWidgetType,
   parseFaustUiControlsFromUnknown,
   type FaustUIItem,
-  type FaustInputWidgetType
+  type FaustInputWidgetType,
+  type FaustMenuEntry
 } from './faust-ui-parse.js';
 
 export type OrbitWidgetType = FaustInputWidgetType;
@@ -17,6 +18,8 @@ export type OrbitControl = {
   max: number; // Maximum parameter value.
   step: number; // Quantization step for continuous widgets.
   unit?: string; // Optional unit label from Faust metadata (ex: "Hz", "dB").
+  menu?: FaustMenuEntry[]; // Optional menu entries parsed from Faust style metadata.
+  menuStyle?: 'menu' | 'radio'; // Presentation hint: 'menu' for dropdown, 'radio' for button group.
   color: string; // Visual color assigned to this control point.
   x: number; // Current x position in Orbit world coordinates.
   y: number; // Current y position in Orbit world coordinates.
@@ -128,6 +131,8 @@ function cloneState(state: OrbitState): OrbitState {
           max: c.max,
           step: c.step,
           ...(c.unit ? { unit: c.unit } : {}),
+          ...(c.menu ? { menu: c.menu.map(e => ({ ...e })) } : {}),
+          ...(c.menuStyle ? { menuStyle: c.menuStyle } : {}),
           color: c.color,
           x: c.x,
           y: c.y,
@@ -401,6 +406,8 @@ export class FaustOrbitUI extends FaustUICore {
       }
 
       const keepUnit = previous && previous.unit ? previous.unit : control.unit;
+      const keepMenu = previous && previous.menu ? previous.menu : control.menu;
+      const keepMenuStyle = previous && previous.menuStyle ? previous.menuStyle : control.menuStyle;
 
       next.controls[control.path] = {
         path: control.path,
@@ -410,6 +417,8 @@ export class FaustOrbitUI extends FaustUICore {
         max: control.max,
         step: keepStep,
         ...(keepUnit ? { unit: keepUnit } : {}),
+        ...(keepMenu ? { menu: keepMenu } : {}),
+        ...(keepMenuStyle ? { menuStyle: keepMenuStyle } : {}),
         color: keepColor,
         x,
         y,
@@ -900,6 +909,10 @@ export class FaustOrbitUI extends FaustUICore {
       const unit = typeof (raw as Record<string, unknown>).unit === 'string'
         ? (raw as Record<string, unknown>).unit as string
         : undefined;
+      const rawMenu = (raw as Record<string, unknown>).menu;
+      const menu = Array.isArray(rawMenu) ? rawMenu as FaustMenuEntry[] : undefined;
+      const rawMenuStyle = (raw as Record<string, unknown>).menuStyle;
+      const menuStyle = rawMenuStyle === 'menu' || rawMenuStyle === 'radio' ? rawMenuStyle : undefined;
       normalized.controls[path] = {
         path,
         type: inferredType,
@@ -908,6 +921,8 @@ export class FaustOrbitUI extends FaustUICore {
         max,
         step,
         ...(unit ? { unit } : {}),
+        ...(menu ? { menu } : {}),
+        ...(menuStyle ? { menuStyle } : {}),
         color,
         x: clamp(Number(raw.x) || normalized.center.x, 0, width),
         y: clamp(Number(raw.y) || normalized.center.y, 0, height),
@@ -1435,6 +1450,54 @@ export class FaustOrbitUI extends FaustUICore {
           this._applyDetailValue(control, checked ? 0 : 1);
         });
       }
+      return;
+    }
+
+    // Menu-style controls: render a <select> dropdown.
+    if (control.menu && control.menu.length > 0 && control.menuStyle !== 'radio') {
+      const options = control.menu.map(e =>
+        `<option value="${e.value}"${e.value === Math.round(value) ? ' selected' : ''}>${e.label}</option>`
+      ).join('');
+      this.detailEl.innerHTML = `
+        <div class="orbit-detail-label">
+          <span class="orbit-detail-color" style="background:${control.color}"></span>
+          <span class="orbit-detail-name">${control.label}</span>
+        </div>
+        <div class="orbit-detail-button-wrap">
+          <select class="orbit-detail-select">${options}</select>
+        </div>`;
+      const sel = this.detailEl.querySelector('.orbit-detail-select');
+      if (sel instanceof HTMLSelectElement) {
+        sel.addEventListener('change', () => {
+          this._applyDetailValue(control, Number(sel.value));
+        });
+      }
+      return;
+    }
+
+    // Radio-style controls: render a button group.
+    if (control.menu && control.menu.length > 0 && control.menuStyle === 'radio') {
+      const rounded = Math.round(value);
+      const buttons = control.menu.map(e =>
+        `<button type="button" class="orbit-detail-btn orbit-detail-radio" data-value="${e.value}">${e.label}</button>`
+      ).join('');
+      this.detailEl.innerHTML = `
+        <div class="orbit-detail-label">
+          <span class="orbit-detail-color" style="background:${control.color}"></span>
+          <span class="orbit-detail-name">${control.label}</span>
+        </div>
+        <div class="orbit-detail-button-wrap">${buttons}</div>`;
+      this.detailEl.querySelectorAll('.orbit-detail-radio').forEach(btn => {
+        const el = btn as HTMLElement;
+        if (Number(el.dataset.value) === rounded) {
+          el.style.borderColor = control.color;
+          el.style.background = control.color;
+          el.style.color = '#0d1016';
+        }
+        el.addEventListener('click', () => {
+          this._applyDetailValue(control, Number(el.dataset.value));
+        });
+      });
       return;
     }
 
