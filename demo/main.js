@@ -16,7 +16,7 @@ async function main() {
       console.log('[faust-orbit-ui demo] paramChangeByUI', { path, value });
     },
     {
-      title: 'Orbit Demo',
+      title: '',
       tooltips: {
         centerButton: 'Re-center controls and outer radius to defaults',
         randomButton: 'Randomize enabled controls',

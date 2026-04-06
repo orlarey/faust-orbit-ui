@@ -210,7 +210,7 @@ export class FaustOrbitUI extends FaustUICore {
   // Builds and initializes the Orbit UI canvas, toolbar, and interactions.
   constructor(root: HTMLElement, paramChangeByUI: ParamChangeByUI, options: FaustOrbitUIOptions = {}) {
     super(root, paramChangeByUI);
-    const title = typeof options.title === 'string' && options.title.trim() ? options.title.trim() : 'Orbit UI';
+    const title = typeof options.title === 'string' && options.title.trim() ? options.title.trim() : '';
     this.onStateChange =
       typeof options.onOrbitStateChange === 'function'
         ? options.onOrbitStateChange
@@ -310,7 +310,13 @@ export class FaustOrbitUI extends FaustUICore {
     this.randomButton = randomButton;
     this.randomMixSelect = randomMixSelect;
     const titleEl = this.root.querySelector('.orbit-title');
-    if (titleEl) titleEl.textContent = title;
+    if (titleEl) {
+      if (title) {
+        titleEl.textContent = title;
+      } else {
+        (titleEl as HTMLElement).style.display = 'none';
+      }
+    }
     if (this.tooltips.centerButton) this.centerButton.title = this.tooltips.centerButton;
     if (this.tooltips.randomButton) this.randomButton.title = this.tooltips.randomButton;
     if (this.tooltips.randomMix) this.randomMixSelect.title = this.tooltips.randomMix;
