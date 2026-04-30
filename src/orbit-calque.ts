@@ -49,6 +49,11 @@ export type OrbitCalqueOptions = {
    *  is expected to delete the selected presets from the library and
    *  push the cleared selection back via setSelection. */
   onTrashSelected?: () => void;
+  /** User submitted a new name for a preset (double-click rename).
+   *  Empty / whitespace-only `name` strips the existing name (returns
+   *  the preset to anonymous status). The host applies the change to
+   *  the library entry and pushes the result back via setLibrary. */
+  onPresetRename?: (configHash: string, name: string) => void;
   /** Optional gesture bracketing for host autosave / undo. */
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
@@ -61,14 +66,18 @@ export class OrbitCalque {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly trashButton: HTMLButtonElement;
+  private readonly nameInput: HTMLInputElement;
   private readonly paramSpecs: ReadonlyArray<ParamSpec>;
   private readonly getCurrentParams: () => Record<string, number>;
   private readonly onApply: (cfg: Record<string, number>) => void;
   private readonly onSelectionChangeCb: ((hashes: ReadonlyArray<string>) => void) | null;
   private readonly onTrashSelectedCb: (() => void) | null;
+  private readonly onPresetRenameCb: ((configHash: string, name: string) => void) | null;
   private readonly onInteractionStart: (() => void) | null;
   private readonly onInteractionEnd: (() => void) | null;
   private readonly resizeObs: ResizeObserver;
+  /** configHash of the preset whose name is currently being edited. */
+  private editingHash: string | null = null;
 
   private library: ReadonlyArray<Preset> = [];
   /** Insertion-ordered set of selected configHashes. */
@@ -90,6 +99,7 @@ export class OrbitCalque {
     this.onApply = opts.onApply;
     this.onSelectionChangeCb = opts.onSelectionChange ?? null;
     this.onTrashSelectedCb = opts.onTrashSelected ?? null;
+    this.onPresetRenameCb = opts.onPresetRename ?? null;
     this.onInteractionStart = opts.onInteractionStart ?? null;
     this.onInteractionEnd = opts.onInteractionEnd ?? null;
 
@@ -115,6 +125,16 @@ export class OrbitCalque {
     this.trashButton.disabled = true;
     this.trashButton.addEventListener('click', () => this.requestTrash());
     this.overlay.appendChild(this.trashButton);
+
+    this.nameInput = document.createElement('input');
+    this.nameInput.type = 'text';
+    this.nameInput.className = 'orbit-ui-overlay-name-input';
+    this.nameInput.style.display = 'none';
+    this.nameInput.addEventListener('keydown', this.handleNameKeyDown);
+    this.nameInput.addEventListener('blur', this.handleNameBlur);
+    this.overlay.appendChild(this.nameInput);
+
+    this.canvas.addEventListener('dblclick', this.handleDoubleClick);
 
     this.orbitBody.appendChild(this.overlay);
 
@@ -178,6 +198,7 @@ export class OrbitCalque {
 
   hide(): void {
     if (!this.visible) return;
+    this.cancelNameEditing();
     this.visible = false;
     this.overlay.classList.remove('orbit-ui-overlay-active');
     this.overlay.style.display = 'none';
@@ -196,6 +217,9 @@ export class OrbitCalque {
     this.canvas.removeEventListener('pointermove', this.handlePointerMove);
     this.canvas.removeEventListener('pointerup', this.handlePointerUp);
     this.canvas.removeEventListener('pointercancel', this.handlePointerUp);
+    this.canvas.removeEventListener('dblclick', this.handleDoubleClick);
+    this.nameInput.removeEventListener('keydown', this.handleNameKeyDown);
+    this.nameInput.removeEventListener('blur', this.handleNameBlur);
     this.resizeObs.disconnect();
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     this.overlay.remove();
@@ -518,6 +542,71 @@ export class OrbitCalque {
       this.paramSpecs,
     );
     this.onApply(cfg);
+  }
+
+  private handleDoubleClick = (e: MouseEvent): void => {
+    if (!this.visible || !this.bounds) return;
+    if (e.shiftKey) return;
+    const idx = this.hitTestPreset(e.clientX, e.clientY);
+    if (idx < 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.startNameEditing(idx);
+  };
+
+  private startNameEditing(presetIndex: number): void {
+    if (!this.bounds) return;
+    const preset = this.library[presetIndex];
+    const pos = this.positions[presetIndex];
+    if (!preset || !pos) return;
+    this.editingHash = preset.configHash;
+    const rect = this.canvas.getBoundingClientRect();
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height);
+    const px = map.x(pos[0]);
+    const py = map.y(pos[1]);
+    const inputW = 140;
+    this.nameInput.style.display = '';
+    this.nameInput.style.left = `${Math.round(px - inputW / 2)}px`;
+    this.nameInput.style.top = `${Math.round(py + DISK_RADIUS_PX + 8)}px`;
+    this.nameInput.style.width = `${inputW}px`;
+    this.nameInput.value = preset.name ?? '';
+    this.nameInput.placeholder = 'Preset name (empty to clear)';
+    this.nameInput.focus();
+    this.nameInput.select();
+  }
+
+  private handleNameKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      this.commitNameEditing();
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      this.cancelNameEditing();
+      return;
+    }
+    // Stop other handlers (calque shortcuts, host Cmd+Z) while typing.
+    e.stopPropagation();
+  };
+
+  private handleNameBlur = (): void => {
+    if (this.editingHash !== null) this.commitNameEditing();
+  };
+
+  private commitNameEditing(): void {
+    const hash = this.editingHash;
+    if (hash === null) return;
+    const value = this.nameInput.value.trim();
+    this.editingHash = null;
+    this.nameInput.style.display = 'none';
+    this.onPresetRenameCb?.(hash, value);
+  }
+
+  private cancelNameEditing(): void {
+    if (this.editingHash === null) return;
+    this.editingHash = null;
+    this.nameInput.style.display = 'none';
   }
 }
 

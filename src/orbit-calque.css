@@ -68,3 +68,25 @@
   border-color: rgba(255, 120, 120, 0.6);
   color: #ffd0d0;
 }
+
+.orbit-ui-overlay-name-input {
+  position: absolute;
+  z-index: 2;
+  border: 1px solid rgba(232, 197, 98, 0.7);
+  border-radius: 4px;
+  padding: 3px 6px;
+  background: rgba(20, 27, 37, 0.95);
+  color: #f4e8c8;
+  font-size: 12px;
+  line-height: 1.2;
+  outline: none;
+}
+
+.orbit-ui-overlay-name-input::placeholder {
+  color: rgba(244, 232, 200, 0.45);
+}
+
+.orbit-ui-overlay-name-input:focus {
+  border-color: #e8c562;
+  box-shadow: 0 0 0 2px rgba(232, 197, 98, 0.25);
+}

@@ -110,6 +110,7 @@ export class OrbitUI {
       onApply: (cfg) => this.applyConfigFromCalque(cfg),
       onSelectionChange: (hashes) => this.handleCalqueSelectionChange(hashes),
       onTrashSelected: () => this.handleTrashSelected(),
+      onPresetRename: (hash, name) => this.handlePresetRename(hash, name),
       onInteractionStart: wrappedStart,
       onInteractionEnd: wrappedEnd,
     });
@@ -222,6 +223,25 @@ export class OrbitUI {
       this.selection.push(h);
     }
     this.onSelectionChangeUser?.(this.selectionEntries());
+  }
+
+  private handlePresetRename(configHash: string, name: string): void {
+    const existing = this.library.get(configHash);
+    if (!existing) return;
+    const trimmed = name.trim();
+    const next: Preset = trimmed.length > 0
+      ? { ...existing, name: trimmed }
+      : (() => { const { name: _omit, ...rest } = existing; void _omit; return rest; })();
+    if (
+      next.name === existing.name
+      || (next.name === undefined && existing.name === undefined)
+    ) {
+      // No change.
+      return;
+    }
+    this.library.set(configHash, next);
+    this.calque.setLibrary(this.libraryArray());
+    this.onLibraryChange?.(this.libraryArray());
   }
 
   private handleTrashSelected(): void {
