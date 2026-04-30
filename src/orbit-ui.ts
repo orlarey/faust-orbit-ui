@@ -6,6 +6,8 @@
  *   • an internal preset library cache + `setLibrary`,
  *   • the niveau-1 calque (read-only over the library cache),
  *   • dwell-based auto-promotion (PRESETSPEC § « Mémorisation »),
+ *   • multi-selection + trash (shift+click toggle, shift+drag marquee,
+ *     trash button / Delete key),
  *   • undo / redo stubs (the actual stacks land in later increments).
  *
  * See ORBITUIAPISPEC.md and ORBITDATAMODELSPEC.md for the contract.
@@ -15,7 +17,7 @@ import { computeUIHashSync } from './orbit-hash.js';
 import { OrbitCalque } from './orbit-calque.js';
 import { extractParamSpecs, type ParamSpec } from './orbit-projection.js';
 import { PresetPromotionTracker } from './orbit-promotion.js';
-import type { Preset } from './orbit-types.js';
+import type { Preset, SelectionEntry } from './orbit-types.js';
 
 const PROMOTION_TICK_MS = 500;
 
@@ -34,6 +36,11 @@ export type OrbitUIOptions = {
    *  (auto-promotion, rename, delete, undo / redo). NOT emitted in
    *  response to `setLibrary` — that is sync-in only. */
   onLibraryChange?: (records: Preset[]) => void;
+
+  /** Emitted when the multi-selection mutates from inside the component
+   *  (shift+click, shift+drag marquee, trash). NOT emitted in response
+   *  to `setSelection` — sync-in only. */
+  onSelectionChange?: (entries: SelectionEntry[]) => void;
 };
 
 export class OrbitUI {
@@ -43,6 +50,7 @@ export class OrbitUI {
   private readonly inner: FaustOrbitUI;
   private readonly container: HTMLElement;
   private readonly onLibraryChange: ((records: Preset[]) => void) | null;
+  private readonly onSelectionChangeUser: ((entries: SelectionEntry[]) => void) | null;
   private readonly paramSpecs: ReadonlyArray<ParamSpec>;
   private readonly userOnParamChange: (path: string, value: number) => void;
   private readonly calque: OrbitCalque;
@@ -51,9 +59,10 @@ export class OrbitUI {
   private readonly tracker: PresetPromotionTracker;
   private tickerId: number | null = null;
 
-  /** Library cache, keyed by `configHash`. Authoritative within the
-   *  component; the host pushes updates via `setLibrary`. */
+  /** Library cache, keyed by `configHash`. */
   private library: Map<string, Preset>;
+  /** Selection of configHashes in insertion order. */
+  private selection: string[];
 
   constructor(container: HTMLElement, options: OrbitUIOptions) {
     if (!container || !(container instanceof HTMLElement)) {
@@ -68,8 +77,10 @@ export class OrbitUI {
     this.uiHash = computeUIHashSync(options.uiDescriptor);
     this.paramSpecs = extractParamSpecs(options.uiDescriptor);
     this.onLibraryChange = options.onLibraryChange ?? null;
+    this.onSelectionChangeUser = options.onSelectionChange ?? null;
     this.userOnParamChange = options.onParamChange;
     this.library = new Map();
+    this.selection = [];
     this.tracker = new PresetPromotionTracker();
 
     const userStart = options.onInteractionStart;
@@ -97,6 +108,8 @@ export class OrbitUI {
       paramSpecs: this.paramSpecs,
       getCurrentParams: () => this.inner.getParamValues(),
       onApply: (cfg) => this.applyConfigFromCalque(cfg),
+      onSelectionChange: (hashes) => this.handleCalqueSelectionChange(hashes),
+      onTrashSelected: () => this.handleTrashSelected(),
       onInteractionStart: wrappedStart,
       onInteractionEnd: wrappedEnd,
     });
@@ -108,18 +121,11 @@ export class OrbitUI {
     this.tickerId = window.setInterval(() => this.tickPromotion(), PROMOTION_TICK_MS);
   }
 
-  /** Push parameter values from the host (e.g. after Faust restoration).
-   *  Does NOT emit `onParamChange`. Invalidates the param undo stack
-   *  (no-op until the stack is implemented). */
   setParams(config: Readonly<Record<string, number>>): void {
     if (!config || typeof config !== 'object') return;
     this.inner.setParams(config);
   }
 
-  /** Replace the library cache from the host (initial load or
-   *  cross-instance sync). Records whose `uiHash` does not match this
-   *  instance's signature are silently dropped. Does NOT emit
-   *  `onLibraryChange`. */
   setLibrary(records: readonly Preset[]): void {
     if (!Array.isArray(records)) return;
     const next = new Map<string, Preset>();
@@ -130,29 +136,46 @@ export class OrbitUI {
     }
     this.library = next;
     this.calque.setLibrary(this.libraryArray());
+    // Drop selection entries that no longer reference an existing preset.
+    this.selection = this.selection.filter((h) => this.library.has(h));
+    this.calque.setSelection(this.selection);
   }
 
-  /** Snapshot of the current library cache. */
+  setSelection(entries: readonly SelectionEntry[]): void {
+    if (!Array.isArray(entries)) return;
+    const valid = entries
+      .filter((e) => isSelectionEntry(e) && e.uiHash === this.uiHash && this.library.has(e.configHash))
+      .slice()
+      .sort((a, b) => a.position - b.position)
+      .map((e) => e.configHash);
+    // Deduplicate while preserving order.
+    const seen = new Set<string>();
+    this.selection = [];
+    for (const h of valid) {
+      if (seen.has(h)) continue;
+      seen.add(h);
+      this.selection.push(h);
+    }
+    this.calque.setSelection(this.selection);
+  }
+
   getLibrary(): Preset[] {
     return this.libraryArray();
   }
 
-  /** Suspend or resume auto-promotion. The host calls this when its own
-   *  side conditions change (audio paused, effect bypassed, …). */
+  getSelection(): SelectionEntry[] {
+    return this.selectionEntries();
+  }
+
   setPromotionSuspended(suspended: boolean): void {
     this.tracker.setSuspended(suspended);
   }
 
-  /** Library undo / redo. Currently no-ops (stack lands in 2.C). */
   undoLibrary(): boolean { return false; }
   redoLibrary(): boolean { return false; }
-
-  /** Param undo / redo. Currently no-ops; the stack lands together with
-   *  the trajectory + commit machinery. */
   undoParams(): boolean { return false; }
   redoParams(): boolean { return false; }
 
-  /** Detach from the DOM. */
   destroy(): void {
     if (this.tickerId !== null) {
       window.clearInterval(this.tickerId);
@@ -164,12 +187,21 @@ export class OrbitUI {
     this.inner.destroy();
     this.container.classList.remove('orbit-ui-root');
     this.library.clear();
+    this.selection = [];
   }
 
   // ------------------------------------------------------------------------
 
   private libraryArray(): Preset[] {
     return Array.from(this.library.values());
+  }
+
+  private selectionEntries(): SelectionEntry[] {
+    return this.selection.map((configHash, position) => ({
+      position,
+      uiHash: this.uiHash,
+      configHash,
+    }));
   }
 
   private applyConfigFromCalque(cfg: Record<string, number>): void {
@@ -179,13 +211,38 @@ export class OrbitUI {
     }
   }
 
+  private handleCalqueSelectionChange(configHashes: ReadonlyArray<string>): void {
+    // Deduplicate while preserving order; clip to the current library.
+    const seen = new Set<string>();
+    this.selection = [];
+    for (const h of configHashes) {
+      if (seen.has(h)) continue;
+      if (!this.library.has(h)) continue;
+      seen.add(h);
+      this.selection.push(h);
+    }
+    this.onSelectionChangeUser?.(this.selectionEntries());
+  }
+
+  private handleTrashSelected(): void {
+    if (this.selection.length === 0) return;
+    let mutated = false;
+    for (const h of this.selection) {
+      if (this.library.delete(h)) mutated = true;
+    }
+    if (!mutated) return;
+    this.selection = [];
+    this.calque.setSelection(this.selection);
+    this.calque.setLibrary(this.libraryArray());
+    this.onSelectionChangeUser?.(this.selectionEntries());
+    this.onLibraryChange?.(this.libraryArray());
+  }
+
   private tickPromotion(): void {
     if (!this.tracker.isArmed()) return;
     const result = this.tracker.evaluate(this.uiHash, this.inner.getParamValues());
     if (!result.promoted) return;
     const candidate = result.preset;
-    // Dedup: if a preset already exists at this configHash, bump its
-    // lastSeenAt and preserve its name (named presets are permanent).
     const existing = this.library.get(candidate.configHash);
     const merged: Preset = existing
       ? { ...existing, lastSeenAt: candidate.lastSeenAt }
@@ -224,8 +281,8 @@ export class OrbitUI {
   private handleKeyDown(e: KeyboardEvent): void {
     const target = e.target as HTMLElement | null;
     if (target && /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === 'l' || e.key === 'L') {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       e.preventDefault();
       this.calque.toggle();
       this.syncCalqueState();
@@ -235,6 +292,13 @@ export class OrbitUI {
       e.preventDefault();
       this.calque.hide();
       this.syncCalqueState();
+      return;
+    }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && this.calque.isVisible()) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (this.selection.length === 0) return;
+      e.preventDefault();
+      this.calque.trashSelected();
     }
   }
 }
@@ -251,4 +315,12 @@ function isPreset(value: unknown): value is Preset {
     if (typeof cv !== 'number') return false;
   }
   return true;
+}
+
+function isSelectionEntry(value: unknown): value is SelectionEntry {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.position === 'number'
+    && typeof v.uiHash === 'string'
+    && typeof v.configHash === 'string';
 }

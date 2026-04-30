@@ -3,9 +3,10 @@
  * plane (PCA) and lets the user navigate by clicking presets or dragging
  * a centre marker (Shepard interpolation).
  *
- * Step 2.A scope: read-only over the library cache. Library mutations
- * (auto-promotion, naming, deletion, multi-selection, undo) are out of
- * scope and land in subsequent increments.
+ * Step 2.A: read-only navigation (recall + Shepard).
+ * Step 2.B.2: multi-selection (shift+click toggle, shift+drag marquee) and
+ *             trash button — emits onSelectionChange / onTrashSelected up
+ *             to OrbitUI which mutates the library cache.
  */
 import {
   computeProjection,
@@ -22,10 +23,12 @@ const CENTER_RADIUS_PX = 8;
 const CENTER_HIT_RADIUS_PX = 14;
 const MARGIN_PX = 24;
 const NAMED_HALO_RADIUS_PX = 11;
+const SELECTION_RING_RADIUS_PX = 13;
 const HALF_LIFE_DAYS = 7;
 const HALF_LIFE_MS = HALF_LIFE_DAYS * 24 * 3600 * 1000;
 
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
+type DragMode = 'none' | 'centre' | 'marquee';
 
 export type OrbitCalqueOptions = {
   /** Container that already hosts the FaustOrbitUI DOM (the orbit-ui-root). */
@@ -36,9 +39,16 @@ export type OrbitCalqueOptions = {
    *  starts where the user already is — no audio jump). */
   getCurrentParams: () => Record<string, number>;
   /** Apply a configuration: pushed continuously during a Shepard drag and
-   *  once on a click-to-recall. The calque trusts the host to mirror this
-   *  to the audio runtime AND to update the inner orbit-ui's param values. */
+   *  once on a click-to-recall. */
   onApply: (configuration: Record<string, number>) => void;
+  /** Selection mutated from inside the calque. The calque emits the
+   *  current ordered list of selected configHashes; OrbitUI is in charge
+   *  of mapping them to SelectionEntry shapes for the host. */
+  onSelectionChange?: (configHashes: ReadonlyArray<string>) => void;
+  /** User clicked the trash button (or pressed Delete/Backspace). Caller
+   *  is expected to delete the selected presets from the library and
+   *  push the cleared selection back via setSelection. */
+  onTrashSelected?: () => void;
   /** Optional gesture bracketing for host autosave / undo. */
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
@@ -50,20 +60,27 @@ export class OrbitCalque {
   private readonly overlay: HTMLDivElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
+  private readonly trashButton: HTMLButtonElement;
   private readonly paramSpecs: ReadonlyArray<ParamSpec>;
   private readonly getCurrentParams: () => Record<string, number>;
   private readonly onApply: (cfg: Record<string, number>) => void;
+  private readonly onSelectionChangeCb: ((hashes: ReadonlyArray<string>) => void) | null;
+  private readonly onTrashSelectedCb: (() => void) | null;
   private readonly onInteractionStart: (() => void) | null;
   private readonly onInteractionEnd: (() => void) | null;
   private readonly resizeObs: ResizeObserver;
 
   private library: ReadonlyArray<Preset> = [];
+  /** Insertion-ordered set of selected configHashes. */
+  private selection: Set<string> = new Set();
   private visible: boolean = false;
   private projection: Projection | null = null;
   private positions: ReadonlyArray<readonly [number, number]> = [];
   private bounds: Bounds | null = null;
   private centerProj: readonly [number, number] | null = null;
-  private dragging: boolean = false;
+  private dragMode: DragMode = 'none';
+  /** Marquee rectangle in canvas (CSS-pixel) coordinates. */
+  private marquee: { startX: number; startY: number; endX: number; endY: number } | null = null;
   private rafId: number | null = null;
 
   constructor(opts: OrbitCalqueOptions) {
@@ -71,6 +88,8 @@ export class OrbitCalque {
     this.paramSpecs = opts.paramSpecs;
     this.getCurrentParams = opts.getCurrentParams;
     this.onApply = opts.onApply;
+    this.onSelectionChangeCb = opts.onSelectionChange ?? null;
+    this.onTrashSelectedCb = opts.onTrashSelected ?? null;
     this.onInteractionStart = opts.onInteractionStart ?? null;
     this.onInteractionEnd = opts.onInteractionEnd ?? null;
 
@@ -87,6 +106,16 @@ export class OrbitCalque {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'orbit-ui-overlay-canvas';
     this.overlay.appendChild(this.canvas);
+
+    this.trashButton = document.createElement('button');
+    this.trashButton.type = 'button';
+    this.trashButton.className = 'orbit-ui-overlay-trash';
+    this.trashButton.title = 'Delete selected presets (Delete)';
+    this.trashButton.textContent = '\u{1F5D1}';
+    this.trashButton.disabled = true;
+    this.trashButton.addEventListener('click', () => this.requestTrash());
+    this.overlay.appendChild(this.trashButton);
+
     this.orbitBody.appendChild(this.overlay);
 
     const ctx = this.canvas.getContext('2d');
@@ -106,15 +135,28 @@ export class OrbitCalque {
 
   setLibrary(records: ReadonlyArray<Preset>): void {
     this.library = records;
+    // Drop selection entries that no longer reference an existing preset.
+    let pruned = false;
+    const known = new Set(records.map((p) => p.configHash));
+    for (const h of this.selection) {
+      if (!known.has(h)) { this.selection.delete(h); pruned = true; }
+    }
+    if (pruned) this.updateTrashButton();
     if (this.visible) {
       this.recomputeProjection();
       this.scheduleRender();
     }
   }
 
-  isVisible(): boolean {
-    return this.visible;
+  /** Push the selection from outside (host sync, OrbitUI replay). Does
+   *  NOT emit onSelectionChange. */
+  setSelection(configHashes: ReadonlyArray<string>): void {
+    this.selection = new Set(configHashes);
+    this.updateTrashButton();
+    if (this.visible) this.scheduleRender();
   }
+
+  isVisible(): boolean { return this.visible; }
 
   toggle(): void {
     if (this.visible) this.hide();
@@ -127,7 +169,6 @@ export class OrbitCalque {
     this.overlay.style.display = '';
     this.overlay.classList.add('orbit-ui-overlay-active');
     this.recomputeProjection();
-    // Place centre at current audible state — no audio jump on toggle-on.
     if (this.projection) {
       this.centerProj = projectConfig(this.getCurrentParams(), this.projection);
       this.expandBoundsForCenter();
@@ -140,7 +181,14 @@ export class OrbitCalque {
     this.visible = false;
     this.overlay.classList.remove('orbit-ui-overlay-active');
     this.overlay.style.display = 'none';
-    this.dragging = false;
+    this.dragMode = 'none';
+    this.marquee = null;
+  }
+
+  /** Triggered by the host (OrbitUI) when Delete/Backspace is pressed
+   *  while the calque has focus. Equivalent to clicking the trash button. */
+  trashSelected(): void {
+    this.requestTrash();
   }
 
   destroy(): void {
@@ -204,12 +252,12 @@ export class OrbitCalque {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
 
-    // Backdrop tint so the orbit-ui shows through dimmed.
     ctx.fillStyle = 'rgba(13, 16, 22, 0.78)';
     ctx.fillRect(0, 0, cssW, cssH);
 
     if (!this.projection || !this.bounds) {
       this.drawHint(ctx, cssW, cssH, 'Library is empty');
+      this.drawMarquee(ctx);
       return;
     }
 
@@ -223,6 +271,14 @@ export class OrbitCalque {
       const py = map.y(pos[1]);
       const lum = lastSeenLuminosity(preset.lastSeenAt, now);
       const named = typeof preset.name === 'string' && preset.name.length > 0;
+      const selected = this.selection.has(preset.configHash);
+      if (selected) {
+        ctx.beginPath();
+        ctx.arc(px, py, SELECTION_RING_RADIUS_PX, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(122, 215, 255, 0.95)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
       if (named) {
         ctx.beginPath();
         ctx.arc(px, py, NAMED_HALO_RADIUS_PX, 0, Math.PI * 2);
@@ -255,9 +311,27 @@ export class OrbitCalque {
       ctx.stroke();
     }
 
+    this.drawMarquee(ctx);
+
     if (this.library.length === 0) {
       this.drawHint(ctx, cssW, cssH, 'Library is empty');
     }
+  }
+
+  private drawMarquee(ctx: CanvasRenderingContext2D): void {
+    const m = this.marquee;
+    if (!m) return;
+    const x = Math.min(m.startX, m.endX);
+    const y = Math.min(m.startY, m.endY);
+    const w = Math.abs(m.endX - m.startX);
+    const h = Math.abs(m.endY - m.startY);
+    ctx.fillStyle = 'rgba(122, 215, 255, 0.10)';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = 'rgba(122, 215, 255, 0.85)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
   }
 
   private drawHint(ctx: CanvasRenderingContext2D, w: number, h: number, msg: string): void {
@@ -308,14 +382,33 @@ export class OrbitCalque {
     return Math.hypot(cx - px, cy - py) <= CENTER_HIT_RADIUS_PX;
   }
 
+  private canvasPoint(clientX: number, clientY: number): { x: number; y: number } {
+    const rect = this.canvas.getBoundingClientRect();
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  }
+
   private handlePointerDown = (e: PointerEvent): void => {
     if (!this.visible || !this.projection) return;
     e.preventDefault();
     this.canvas.setPointerCapture(e.pointerId);
 
+    if (e.shiftKey) {
+      // Shift+click on a preset → toggle in selection. Else → start marquee.
+      const presetIdx = this.hitTestPreset(e.clientX, e.clientY);
+      if (presetIdx >= 0) {
+        const preset = this.library[presetIdx]!;
+        this.toggleInSelection(preset.configHash);
+        return;
+      }
+      const p = this.canvasPoint(e.clientX, e.clientY);
+      this.dragMode = 'marquee';
+      this.marquee = { startX: p.x, startY: p.y, endX: p.x, endY: p.y };
+      this.scheduleRender();
+      return;
+    }
+
     const presetIdx = this.hitTestPreset(e.clientX, e.clientY);
     if (presetIdx >= 0) {
-      // Click-to-recall: snap centre to the preset, apply its configuration.
       const preset = this.library[presetIdx]!;
       const pos = this.positions[presetIdx]!;
       this.centerProj = pos;
@@ -326,35 +419,95 @@ export class OrbitCalque {
       return;
     }
 
-    // Drag (centre or empty space → start centre drag at pointer).
     const proj = this.canvasToProj(e.clientX, e.clientY);
     if (!proj) return;
     if (!this.hitTestCentre(e.clientX, e.clientY)) {
       this.centerProj = proj;
     }
-    this.dragging = true;
+    this.dragMode = 'centre';
     this.onInteractionStart?.();
     this.applyCentre();
     this.scheduleRender();
   };
 
   private handlePointerMove = (e: PointerEvent): void => {
-    if (!this.dragging) return;
-    const proj = this.canvasToProj(e.clientX, e.clientY);
-    if (!proj) return;
-    this.centerProj = proj;
-    this.applyCentre();
-    this.scheduleRender();
+    if (this.dragMode === 'centre') {
+      const proj = this.canvasToProj(e.clientX, e.clientY);
+      if (!proj) return;
+      this.centerProj = proj;
+      this.applyCentre();
+      this.scheduleRender();
+      return;
+    }
+    if (this.dragMode === 'marquee' && this.marquee) {
+      const p = this.canvasPoint(e.clientX, e.clientY);
+      this.marquee = { ...this.marquee, endX: p.x, endY: p.y };
+      this.scheduleRender();
+    }
   };
 
   private handlePointerUp = (e: PointerEvent): void => {
     if (this.canvas.hasPointerCapture(e.pointerId)) {
       this.canvas.releasePointerCapture(e.pointerId);
     }
-    if (!this.dragging) return;
-    this.dragging = false;
-    this.onInteractionEnd?.();
+    if (this.dragMode === 'centre') {
+      this.dragMode = 'none';
+      this.onInteractionEnd?.();
+      return;
+    }
+    if (this.dragMode === 'marquee' && this.marquee) {
+      this.finalizeMarquee();
+      this.marquee = null;
+      this.dragMode = 'none';
+      this.scheduleRender();
+    }
   };
+
+  private finalizeMarquee(): void {
+    const m = this.marquee;
+    if (!m || !this.bounds) return;
+    const x0 = Math.min(m.startX, m.endX);
+    const x1 = Math.max(m.startX, m.endX);
+    const y0 = Math.min(m.startY, m.endY);
+    const y1 = Math.max(m.startY, m.endY);
+    const rect = this.canvas.getBoundingClientRect();
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height);
+    let mutated = false;
+    for (let i = 0; i < this.library.length; i += 1) {
+      const pos = this.positions[i]!;
+      const cx = map.x(pos[0]);
+      const cy = map.y(pos[1]);
+      if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) {
+        const hash = this.library[i]!.configHash;
+        if (!this.selection.has(hash)) {
+          this.selection.add(hash);
+          mutated = true;
+        }
+      }
+    }
+    if (mutated) this.emitSelection();
+  }
+
+  private toggleInSelection(configHash: string): void {
+    if (this.selection.has(configHash)) this.selection.delete(configHash);
+    else this.selection.add(configHash);
+    this.emitSelection();
+    this.scheduleRender();
+  }
+
+  private emitSelection(): void {
+    this.updateTrashButton();
+    this.onSelectionChangeCb?.(Array.from(this.selection));
+  }
+
+  private updateTrashButton(): void {
+    this.trashButton.disabled = this.selection.size === 0;
+  }
+
+  private requestTrash(): void {
+    if (this.selection.size === 0) return;
+    this.onTrashSelectedCb?.();
+  }
 
   private applyCentre(): void {
     if (!this.centerProj) return;
@@ -393,7 +546,6 @@ function computeBounds(points: ReadonlyArray<readonly [number, number]>): Bounds
     if (y > maxY) maxY = y;
   }
   const span = Math.max(maxX - minX, maxY - minY, 1e-3);
-  // Pad to a square so the projection isn't squished on one axis.
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
   return {
@@ -425,6 +577,5 @@ function makeProjToCanvas(b: Bounds, w: number, h: number) {
 function lastSeenLuminosity(lastSeenAt: number, now: number): number {
   const age = Math.max(0, now - lastSeenAt);
   const decay = Math.exp(-age / HALF_LIFE_MS * Math.LN2);
-  // Map decay ∈ [0, 1] to luminosity ∈ [80, 235].
   return Math.round(80 + decay * (235 - 80));
 }

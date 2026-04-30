@@ -39,3 +39,32 @@
   outline: 1px solid rgba(122, 215, 255, 0.25);
   outline-offset: -1px;
 }
+
+.orbit-ui-overlay-trash {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(122, 215, 255, 0.3);
+  border-radius: 6px;
+  background: rgba(20, 27, 37, 0.85);
+  color: #d7dde7;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.orbit-ui-overlay-trash:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.orbit-ui-overlay-trash:not(:disabled):hover {
+  background: rgba(60, 30, 30, 0.85);
+  border-color: rgba(255, 120, 120, 0.6);
+  color: #ffd0d0;
+}
