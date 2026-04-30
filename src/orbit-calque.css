@@ -1,0 +1,41 @@
+/* Library toggle button injected into the orbit-ui header. */
+.orbit-library-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: #1a2230;
+  color: #d7dde7;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.orbit-library-btn:hover {
+  background: #25324a;
+}
+
+.orbit-library-btn[aria-pressed='true'] {
+  background: #2b4d6e;
+  color: #eaf2fb;
+}
+
+/* Niveau-1 calque overlay rendered above the FaustOrbitUI canvas. */
+.orbit-ui-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.orbit-ui-overlay-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.orbit-ui-overlay.orbit-ui-overlay-active {
+  outline: 1px solid rgba(122, 215, 255, 0.25);
+  outline-offset: -1px;
+}

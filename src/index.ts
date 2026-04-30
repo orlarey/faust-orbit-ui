@@ -2,4 +2,6 @@ export * from './faust-core-ui.js';
 export * from './faust-ui-parse.js';
 export * from './faust-orbit-ui.js';
 export * from './orbit-types.js';
+export * from './orbit-projection.js';
+export * from './orbit-calque.js';
 export * from './orbit-ui.js';

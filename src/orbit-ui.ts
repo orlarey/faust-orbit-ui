@@ -3,16 +3,16 @@
  *
  * Thin wrapper around the legacy `FaustOrbitUI` renderer that adds:
  *   • a synchronous `uiHash` derived from the Faust UI signature,
- *   • an internal preset library cache + `setLibrary` / `onLibraryChange`,
+ *   • an internal preset library cache + `setLibrary`,
+ *   • the niveau-1 calque (read-only over the library cache),
  *   • undo / redo stubs (the actual stacks land in later increments).
  *
- * See ORBITUIAPISPEC.md and ORBITDATAMODELSPEC.md for the contract this
- * class implements. This file is intentionally minimal: trajectory,
- * selection, loop settings, calque, auto-promotion and the recall menu
- * are scheduled for subsequent steps and are NOT exposed yet.
+ * See ORBITUIAPISPEC.md and ORBITDATAMODELSPEC.md for the contract.
  */
 import { FaustOrbitUI } from './faust-orbit-ui.js';
 import { computeUIHashSync } from './orbit-hash.js';
+import { OrbitCalque } from './orbit-calque.js';
+import { extractParamSpecs, type ParamSpec } from './orbit-projection.js';
 import type { Preset } from './orbit-types.js';
 
 export type OrbitUIOptions = {
@@ -39,6 +39,11 @@ export class OrbitUI {
   private readonly inner: FaustOrbitUI;
   private readonly container: HTMLElement;
   private readonly onLibraryChange: ((records: Preset[]) => void) | null;
+  private readonly paramSpecs: ReadonlyArray<ParamSpec>;
+  private readonly userOnParamChange: (path: string, value: number) => void;
+  private readonly calque: OrbitCalque;
+  private readonly toggleButton: HTMLButtonElement;
+  private readonly onKeyDown: (e: KeyboardEvent) => void;
 
   /** Library cache, keyed by `configHash`. Authoritative within the
    *  component; the host pushes updates via `setLibrary`. */
@@ -55,7 +60,9 @@ export class OrbitUI {
     this.container = container;
     this.container.classList.add('orbit-ui-root');
     this.uiHash = computeUIHashSync(options.uiDescriptor);
+    this.paramSpecs = extractParamSpecs(options.uiDescriptor);
     this.onLibraryChange = options.onLibraryChange ?? null;
+    this.userOnParamChange = options.onParamChange;
     this.library = new Map();
 
     this.inner = new FaustOrbitUI(container, options.onParamChange, {
@@ -65,6 +72,19 @@ export class OrbitUI {
 
     const initialState = this.inner.buildControlsFromUnknown(options.uiDescriptor);
     this.inner.setOrbitState(initialState);
+
+    this.calque = new OrbitCalque({
+      container,
+      paramSpecs: this.paramSpecs,
+      getCurrentParams: () => this.inner.getParamValues(),
+      onApply: (cfg) => this.applyConfigFromCalque(cfg),
+      onInteractionStart: options.onInteractionStart,
+      onInteractionEnd: options.onInteractionEnd,
+    });
+
+    this.toggleButton = this.injectLibraryButton();
+    this.onKeyDown = (e) => this.handleKeyDown(e);
+    this.container.addEventListener('keydown', this.onKeyDown);
   }
 
   /** Push parameter values from the host (e.g. after Faust restoration).
@@ -89,17 +109,16 @@ export class OrbitUI {
       next.set(record.configHash, record);
     }
     this.library = next;
+    this.calque.setLibrary(this.libraryArray());
   }
 
-  /** Snapshot of the current library cache (for tests / introspection;
-   *  the host normally tracks library state via `onLibraryChange`). */
+  /** Snapshot of the current library cache. */
   getLibrary(): Preset[] {
-    return Array.from(this.library.values());
+    return this.libraryArray();
   }
 
-  /** Library undo / redo. Currently no-ops (the stack lands with the
-   *  calque + auto-promotion implementation). Returns `false` so the
-   *  host falls through to the parent scope. */
+  /** Library undo / redo. Currently no-ops (stack lands with auto-promotion
+   *  + library mutations in step 2.B / 2.C). */
   undoLibrary(): boolean {
     void this.onLibraryChange;
     return false;
@@ -117,12 +136,71 @@ export class OrbitUI {
     return false;
   }
 
-  /** Detach from the DOM. After this call, no further events fire and
-   *  internal caches are cleared. */
+  /** Detach from the DOM. */
   destroy(): void {
+    this.container.removeEventListener('keydown', this.onKeyDown);
+    this.toggleButton.remove();
+    this.calque.destroy();
     this.inner.destroy();
     this.container.classList.remove('orbit-ui-root');
     this.library.clear();
+  }
+
+  // ------------------------------------------------------------------------
+
+  private libraryArray(): Preset[] {
+    return Array.from(this.library.values());
+  }
+
+  private applyConfigFromCalque(cfg: Record<string, number>): void {
+    // Update the inner orbit-ui's visual + cached values, AND emit
+    // onParamChange to the host for each address so the audio runtime
+    // mirrors the change.
+    this.inner.setParams(cfg);
+    for (const [path, value] of Object.entries(cfg)) {
+      this.userOnParamChange(path, value);
+    }
+  }
+
+  private injectLibraryButton(): HTMLButtonElement {
+    const middle = this.container.querySelector<HTMLElement>('.orbit-middle-actions');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'orbit-library-btn';
+    button.textContent = 'Library';
+    button.title = 'Toggle preset library overlay (L)';
+    button.setAttribute('aria-pressed', 'false');
+    button.addEventListener('click', () => {
+      this.calque.toggle();
+      this.syncToggleState();
+    });
+    if (middle) {
+      middle.appendChild(button);
+    } else {
+      this.container.appendChild(button);
+    }
+    return button;
+  }
+
+  private syncToggleState(): void {
+    this.toggleButton.setAttribute('aria-pressed', String(this.calque.isVisible()));
+  }
+
+  private handleKeyDown(e: KeyboardEvent): void {
+    const target = e.target as HTMLElement | null;
+    if (target && /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'l' || e.key === 'L') {
+      e.preventDefault();
+      this.calque.toggle();
+      this.syncToggleState();
+      return;
+    }
+    if (e.key === 'Escape' && this.calque.isVisible()) {
+      e.preventDefault();
+      this.calque.hide();
+      this.syncToggleState();
+    }
   }
 }
 

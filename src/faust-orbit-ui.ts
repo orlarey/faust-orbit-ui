@@ -352,6 +352,11 @@ export class FaustOrbitUI extends FaustUICore {
     return cloneState(this.state);
   }
 
+  // Returns a snapshot of the most recently observed parameter values.
+  getParamValues(): Record<Path, ParamValue> {
+    return { ...this.paramValues };
+  }
+
   // Applies a fully typed Orbit state directly to the renderer.
   setOrbitState(state: OrbitState): void {
     this.state = cloneState(state);

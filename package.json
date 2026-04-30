@@ -18,7 +18,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/faust-orbit-ui.css dist/faust-orbit-ui.css",
+    "build": "tsc -p tsconfig.json && cat src/faust-orbit-ui.css src/orbit-calque.css > dist/faust-orbit-ui.css",
     "demo:serve": "python3 -m http.server 4173 -d .",
     "test": "npm run build"
   },
