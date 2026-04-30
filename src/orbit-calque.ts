@@ -18,14 +18,17 @@ import {
 import type { Preset } from './orbit-types.js';
 
 const DISK_RADIUS_PX = 8;
+const RING_RADIUS_PX = 11;
 const POINT_HIT_RADIUS_PX = 13;
 const CENTER_RADIUS_PX = 8;
 const CENTER_HIT_RADIUS_PX = 14;
 const MARGIN_PX = 24;
-const NAMED_HALO_RADIUS_PX = 11;
-const SELECTION_RING_RADIUS_PX = 13;
-const HALF_LIFE_DAYS = 7;
-const HALF_LIFE_MS = HALF_LIFE_DAYS * 24 * 3600 * 1000;
+const SELECTION_RING_RADIUS_PX = 14;
+const CONTRIBUTION_THRESHOLD = 0.001;
+/** Pink for auto-promoted (anonymous) presets — same convention as webdaw. */
+const PRESET_FILL_ANONYMOUS = 'rgb(232, 110, 158)';
+/** Gold for named (permanent) presets — visually distinct from the crowd. */
+const PRESET_FILL_NAMED = 'rgb(232, 201, 122)';
 
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 type DragMode = 'none' | 'centre' | 'marquee';
@@ -290,16 +293,18 @@ export class OrbitCalque {
     }
 
     const map = makeProjToCanvas(this.bounds, cssW, cssH);
-    const now = Date.now();
+    const weights = this.computeContributionWeights(map);
 
     for (let i = 0; i < this.library.length; i += 1) {
       const preset = this.library[i]!;
       const pos = this.positions[i]!;
       const px = map.x(pos[0]);
       const py = map.y(pos[1]);
-      const lum = lastSeenLuminosity(preset.lastSeenAt, now);
+      const w = weights[i] ?? 0;
       const named = typeof preset.name === 'string' && preset.name.length > 0;
       const selected = this.selection.has(preset.configHash);
+
+      // Outer selection ring (cyan).
       if (selected) {
         ctx.beginPath();
         ctx.arc(px, py, SELECTION_RING_RADIUS_PX, 0, Math.PI * 2);
@@ -307,19 +312,32 @@ export class OrbitCalque {
         ctx.lineWidth = 2;
         ctx.stroke();
       }
-      if (named) {
+
+      // Background ring (faint white) + contribution arc (bright white).
+      // Arc length encodes this preset's normalised Shepard weight in
+      // ψ(centre), starting at -π/2 and growing clockwise. Same convention
+      // as the orbit-ui parameter widget arcs.
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)';
+      ctx.beginPath();
+      ctx.arc(px, py, RING_RADIUS_PX, 0, Math.PI * 2);
+      ctx.stroke();
+      if (w > CONTRIBUTION_THRESHOLD) {
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
         ctx.beginPath();
-        ctx.arc(px, py, NAMED_HALO_RADIUS_PX, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(232, 197, 98, 0.85)';
-        ctx.lineWidth = 1.5;
+        ctx.arc(px, py, RING_RADIUS_PX, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * w);
         ctx.stroke();
       }
+      ctx.lineCap = 'butt';
+
+      // Filled disc (pink anonymous, gold named).
       ctx.beginPath();
       ctx.arc(px, py, DISK_RADIUS_PX, 0, Math.PI * 2);
-      ctx.fillStyle = `rgb(${lum}, ${lum}, ${lum})`;
+      ctx.fillStyle = named ? PRESET_FILL_NAMED : PRESET_FILL_ANONYMOUS;
       ctx.fill();
       ctx.lineWidth = 1;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
       ctx.stroke();
     }
 
@@ -548,6 +566,35 @@ export class OrbitCalque {
     this.onApply(cfg);
   }
 
+  /**
+   * Per-preset normalised Shepard contribution at the current centre, in
+   * canvas pixel space (so the arcs reflect what the user actually sees,
+   * not the underlying projection units). `w_i = (1/d_i^2) / Σ (1/d_j^2)`,
+   * with the d=0 snap as in `shepardInterpolate`.
+   */
+  private computeContributionWeights(map: ReturnType<typeof makeProjToCanvas>): number[] {
+    const n = this.library.length;
+    if (n === 0 || !this.centerProj) return new Array(n).fill(0);
+    const cx = map.x(this.centerProj[0]);
+    const cy = map.y(this.centerProj[1]);
+    const distances: number[] = new Array(n);
+    for (let i = 0; i < n; i += 1) {
+      const pos = this.positions[i]!;
+      distances[i] = Math.hypot(map.x(pos[0]) - cx, map.y(pos[1]) - cy);
+    }
+    for (let i = 0; i < n; i += 1) {
+      if (distances[i] === 0) {
+        const out = new Array(n).fill(0);
+        out[i] = 1;
+        return out;
+      }
+    }
+    const raw = distances.map((d) => isFinite(d) ? Math.pow(d, -2) : 0);
+    const sum = raw.reduce((a, b) => a + b, 0);
+    if (sum > 0) return raw.map((r) => r / sum);
+    return new Array(n).fill(0);
+  }
+
   private handleDoubleClick = (e: MouseEvent): void => {
     if (!this.visible || !this.bounds) return;
     if (e.shiftKey) return;
@@ -667,8 +714,3 @@ function makeProjToCanvas(b: Bounds, w: number, h: number) {
   };
 }
 
-function lastSeenLuminosity(lastSeenAt: number, now: number): number {
-  const age = Math.max(0, now - lastSeenAt);
-  const decay = Math.exp(-age / HALF_LIFE_MS * Math.LN2);
-  return Math.round(80 + decay * (235 - 80));
-}
