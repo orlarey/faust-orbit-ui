@@ -112,6 +112,8 @@ export class OrbitCalque {
     this.overlay = document.createElement('div');
     this.overlay.className = 'orbit-ui-overlay';
     this.overlay.style.display = 'none';
+    // Focusable so Cmd+Z routing (host) sees it via document.activeElement.
+    this.overlay.tabIndex = 0;
 
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'orbit-ui-overlay-canvas';
@@ -194,6 +196,8 @@ export class OrbitCalque {
       this.expandBoundsForCenter();
     }
     this.scheduleRender();
+    // Move focus into the overlay so the host's Cmd+Z routing sees it.
+    this.overlay.focus({ preventScroll: true });
   }
 
   hide(): void {

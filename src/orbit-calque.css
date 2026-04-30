@@ -35,6 +35,10 @@
   cursor: crosshair;
 }
 
+.orbit-ui-overlay:focus {
+  outline: none;
+}
+
 .orbit-ui-overlay.orbit-ui-overlay-active {
   outline: 1px solid rgba(122, 215, 255, 0.25);
   outline-offset: -1px;

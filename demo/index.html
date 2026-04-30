@@ -10,11 +10,48 @@
   <body>
     <div class="page">
       <div class="header">
-        <div class="title">faust-orbit-ui demo</div>
+        <div class="title">faust-orbit-ui demo — OrbitUI wrapper</div>
+        <div class="hints">
+          <kbd>L</kbd> toggle calque ·
+          <kbd>Esc</kbd> close ·
+          click preset = recall ·
+          drag centre = Shepard ·
+          <kbd>Shift</kbd>+click = toggle selection ·
+          <kbd>Shift</kbd>+drag = marquee ·
+          <kbd>Delete</kbd> = trash ·
+          double-click preset = rename
+        </div>
       </div>
-      <div id="orbit-root" aria-label="Orbit demo panel"></div>
+      <div class="layout">
+        <div id="orbit-root" aria-label="Orbit demo panel"></div>
+        <aside class="events">
+          <div class="events-title">Events</div>
+          <div id="events-log"></div>
+        </aside>
+      </div>
     </div>
 
+    <script>
+      // Catch import / parse errors before the module fully loads.
+      window.addEventListener('error', (e) => {
+        const log = document.getElementById('events-log');
+        if (!log) return;
+        const div = document.createElement('div');
+        div.className = 'event';
+        div.style.color = '#ff8a8a';
+        div.textContent = `LOAD ERROR: ${e.message} @ ${e.filename}:${e.lineno}`;
+        log.prepend(div);
+      });
+      window.addEventListener('unhandledrejection', (e) => {
+        const log = document.getElementById('events-log');
+        if (!log) return;
+        const div = document.createElement('div');
+        div.className = 'event';
+        div.style.color = '#ff8a8a';
+        div.textContent = `UNHANDLED: ${e.reason?.message ?? e.reason}\n${e.reason?.stack ?? ''}`;
+        log.prepend(div);
+      });
+    </script>
     <script type="module" src="./main.js"></script>
   </body>
 </html>
