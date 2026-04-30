@@ -8,7 +8,11 @@
  *   • dwell-based auto-promotion (PRESETSPEC § « Mémorisation »),
  *   • multi-selection + trash (shift+click toggle, shift+drag marquee,
  *     trash button / Delete key),
- *   • undo / redo stubs (the actual stacks land in later increments).
+ *   • inline preset renaming (double-click),
+ *   • library undo / redo (per uiHash, scoped to this instance).
+ *
+ * Param undo / redo land together with the trajectory + commit machinery
+ * in step 3.
  *
  * See ORBITUIAPISPEC.md and ORBITDATAMODELSPEC.md for the contract.
  */
@@ -17,6 +21,7 @@ import { computeUIHashSync } from './orbit-hash.js';
 import { OrbitCalque } from './orbit-calque.js';
 import { extractParamSpecs, type ParamSpec } from './orbit-projection.js';
 import { PresetPromotionTracker } from './orbit-promotion.js';
+import { LibraryUndoScope, type LibraryOp } from './orbit-library-undo.js';
 import type { Preset, SelectionEntry } from './orbit-types.js';
 
 const PROMOTION_TICK_MS = 500;
@@ -57,6 +62,7 @@ export class OrbitUI {
   private readonly toggleButton: HTMLButtonElement;
   private readonly onKeyDown: (e: KeyboardEvent) => void;
   private readonly tracker: PresetPromotionTracker;
+  private readonly libraryUndo: LibraryUndoScope;
   private tickerId: number | null = null;
 
   /** Library cache, keyed by `configHash`. */
@@ -82,6 +88,7 @@ export class OrbitUI {
     this.library = new Map();
     this.selection = [];
     this.tracker = new PresetPromotionTracker();
+    this.libraryUndo = new LibraryUndoScope();
 
     const userStart = options.onInteractionStart;
     const userEnd = options.onInteractionEnd;
@@ -136,8 +143,9 @@ export class OrbitUI {
       next.set(record.configHash, record);
     }
     this.library = next;
+    // External library push invalidates the undo history.
+    this.libraryUndo.clear();
     this.calque.setLibrary(this.libraryArray());
-    // Drop selection entries that no longer reference an existing preset.
     this.selection = this.selection.filter((h) => this.library.has(h));
     this.calque.setSelection(this.selection);
   }
@@ -149,7 +157,6 @@ export class OrbitUI {
       .slice()
       .sort((a, b) => a.position - b.position)
       .map((e) => e.configHash);
-    // Deduplicate while preserving order.
     const seen = new Set<string>();
     this.selection = [];
     for (const h of valid) {
@@ -160,20 +167,29 @@ export class OrbitUI {
     this.calque.setSelection(this.selection);
   }
 
-  getLibrary(): Preset[] {
-    return this.libraryArray();
-  }
-
-  getSelection(): SelectionEntry[] {
-    return this.selectionEntries();
-  }
+  getLibrary(): Preset[] { return this.libraryArray(); }
+  getSelection(): SelectionEntry[] { return this.selectionEntries(); }
 
   setPromotionSuspended(suspended: boolean): void {
     this.tracker.setSuspended(suspended);
   }
 
-  undoLibrary(): boolean { return false; }
-  redoLibrary(): boolean { return false; }
+  undoLibrary(): boolean {
+    const op = this.libraryUndo.popUndo();
+    if (!op) return false;
+    this.revertLibraryOp(op);
+    this.emitLibraryChange();
+    return true;
+  }
+
+  redoLibrary(): boolean {
+    const op = this.libraryUndo.popRedo();
+    if (!op) return false;
+    this.applyLibraryOp(op);
+    this.emitLibraryChange();
+    return true;
+  }
+
   undoParams(): boolean { return false; }
   redoParams(): boolean { return false; }
 
@@ -205,6 +221,11 @@ export class OrbitUI {
     }));
   }
 
+  private emitLibraryChange(): void {
+    this.calque.setLibrary(this.libraryArray());
+    this.onLibraryChange?.(this.libraryArray());
+  }
+
   private applyConfigFromCalque(cfg: Record<string, number>): void {
     this.inner.setParams(cfg);
     for (const [path, value] of Object.entries(cfg)) {
@@ -213,7 +234,6 @@ export class OrbitUI {
   }
 
   private handleCalqueSelectionChange(configHashes: ReadonlyArray<string>): void {
-    // Deduplicate while preserving order; clip to the current library.
     const seen = new Set<string>();
     this.selection = [];
     for (const h of configHashes) {
@@ -229,33 +249,36 @@ export class OrbitUI {
     const existing = this.library.get(configHash);
     if (!existing) return;
     const trimmed = name.trim();
-    const next: Preset = trimmed.length > 0
-      ? { ...existing, name: trimmed }
-      : (() => { const { name: _omit, ...rest } = existing; void _omit; return rest; })();
-    if (
-      next.name === existing.name
-      || (next.name === undefined && existing.name === undefined)
-    ) {
-      // No change.
-      return;
-    }
-    this.library.set(configHash, next);
-    this.calque.setLibrary(this.libraryArray());
-    this.onLibraryChange?.(this.libraryArray());
+    const nextName: string | undefined = trimmed.length > 0 ? trimmed : undefined;
+    if (nextName === existing.name) return;
+    this.library.set(configHash, applyName(existing, nextName));
+    this.libraryUndo.record({
+      kind: 'rename',
+      configHash,
+      prevName: existing.name,
+      nextName,
+    });
+    this.emitLibraryChange();
   }
 
   private handleTrashSelected(): void {
     if (this.selection.length === 0) return;
-    let mutated = false;
+    const records: Preset[] = [];
     for (const h of this.selection) {
-      if (this.library.delete(h)) mutated = true;
+      const r = this.library.get(h);
+      if (r) records.push(r);
     }
-    if (!mutated) return;
+    if (records.length === 0) return;
+    for (const r of records) this.library.delete(r.configHash);
     this.selection = [];
     this.calque.setSelection(this.selection);
-    this.calque.setLibrary(this.libraryArray());
     this.onSelectionChangeUser?.(this.selectionEntries());
-    this.onLibraryChange?.(this.libraryArray());
+    this.libraryUndo.record(
+      records.length === 1
+        ? { kind: 'delete', record: records[0]! }
+        : { kind: 'deleteBatch', records },
+    );
+    this.emitLibraryChange();
   }
 
   private tickPromotion(): void {
@@ -264,12 +287,74 @@ export class OrbitUI {
     if (!result.promoted) return;
     const candidate = result.preset;
     const existing = this.library.get(candidate.configHash);
-    const merged: Preset = existing
-      ? { ...existing, lastSeenAt: candidate.lastSeenAt }
-      : candidate;
-    this.library.set(merged.configHash, merged);
-    this.calque.setLibrary(this.libraryArray());
-    this.onLibraryChange?.(this.libraryArray());
+    if (existing) {
+      // Re-promotion of a known config: bump lastSeenAt, preserve name.
+      // Not undoable — informational state only.
+      this.library.set(candidate.configHash, { ...existing, lastSeenAt: candidate.lastSeenAt });
+    } else {
+      this.library.set(candidate.configHash, candidate);
+      this.libraryUndo.record({ kind: 'add', record: candidate });
+    }
+    this.emitLibraryChange();
+  }
+
+  private revertLibraryOp(op: LibraryOp): void {
+    switch (op.kind) {
+      case 'add':
+        this.library.delete(op.record.configHash);
+        // Drop selection entries pointing at the removed preset.
+        if (this.selection.includes(op.record.configHash)) {
+          this.selection = this.selection.filter((h) => h !== op.record.configHash);
+          this.calque.setSelection(this.selection);
+          this.onSelectionChangeUser?.(this.selectionEntries());
+        }
+        return;
+      case 'delete':
+        this.library.set(op.record.configHash, op.record);
+        return;
+      case 'deleteBatch':
+        for (const r of op.records) this.library.set(r.configHash, r);
+        return;
+      case 'rename': {
+        const cur = this.library.get(op.configHash);
+        if (!cur) return;
+        this.library.set(op.configHash, applyName(cur, op.prevName));
+        return;
+      }
+    }
+  }
+
+  private applyLibraryOp(op: LibraryOp): void {
+    switch (op.kind) {
+      case 'add':
+        this.library.set(op.record.configHash, op.record);
+        return;
+      case 'delete':
+        this.library.delete(op.record.configHash);
+        if (this.selection.includes(op.record.configHash)) {
+          this.selection = this.selection.filter((h) => h !== op.record.configHash);
+          this.calque.setSelection(this.selection);
+          this.onSelectionChangeUser?.(this.selectionEntries());
+        }
+        return;
+      case 'deleteBatch':
+        {
+          const removed = new Set(op.records.map((r) => r.configHash));
+          for (const r of op.records) this.library.delete(r.configHash);
+          if (this.selection.some((h) => removed.has(h))) {
+            this.selection = this.selection.filter((h) => !removed.has(h));
+            this.calque.setSelection(this.selection);
+            this.onSelectionChangeUser?.(this.selectionEntries());
+          }
+        }
+        return;
+      case 'rename': {
+        const cur = this.library.get(op.configHash);
+        if (!cur) return;
+        this.library.set(op.configHash, applyName(cur, op.nextName));
+        return;
+      }
+    }
   }
 
   private injectLibraryButton(): HTMLButtonElement {
@@ -321,6 +406,15 @@ export class OrbitUI {
       this.calque.trashSelected();
     }
   }
+}
+
+function applyName(p: Preset, name: string | undefined): Preset {
+  if (!name) {
+    const { name: _omit, ...rest } = p;
+    void _omit;
+    return rest as Preset;
+  }
+  return { ...p, name };
 }
 
 function isPreset(value: unknown): value is Preset {
