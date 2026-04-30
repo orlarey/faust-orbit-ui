@@ -1,13 +1,24 @@
-/* Library toggle button injected into the orbit-ui header. */
+/* Library toggle button injected into the orbit-ui header. Icon-only,
+   styled to blend with .orbit-center-btn / .orbit-random-btn. */
 .orbit-library-btn {
-  border: 0;
+  border: 1px solid #3a4a5f;
   border-radius: 999px;
-  padding: 7px 12px;
+  padding: 4px 10px;
   background: #1a2230;
   color: #d7dde7;
-  font-size: 13px;
+  font: inherit;
+  font-size: 0.6rem;
   line-height: 1;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.orbit-library-btn .material-symbols-outlined {
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: middle;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
 }
 
 .orbit-library-btn:hover {
@@ -17,6 +28,7 @@
 .orbit-library-btn[aria-pressed='true'] {
   background: #2b4d6e;
   color: #eaf2fb;
+  border-color: #4a7298;
 }
 
 /* Niveau-1 calque overlay rendered above the FaustOrbitUI canvas. */
@@ -44,48 +56,61 @@
   outline-offset: -1px;
 }
 
-.orbit-ui-overlay-trash {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 32px;
-  height: 32px;
-  border: 1px solid rgba(122, 215, 255, 0.3);
-  border-radius: 6px;
-  background: rgba(20, 27, 37, 0.85);
+/* Trash button injected into the orbit-ui toolbar. Same proportions as
+   Center / Random / Library. Hidden when the selection is empty so the
+   layout reads cleanly when there's nothing to delete. */
+.orbit-trash-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: #1a2230;
   color: #d7dde7;
-  font-size: 16px;
+  font: inherit;
+  font-size: 0.6rem;
   line-height: 1;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
 }
 
-.orbit-ui-overlay-trash:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
+.orbit-trash-btn[hidden] {
+  display: none !important;
 }
 
-.orbit-ui-overlay-trash:not(:disabled):hover {
+.orbit-trash-btn .material-symbols-outlined {
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: middle;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
+}
+
+.orbit-trash-btn:hover {
   background: rgba(60, 30, 30, 0.85);
-  border-color: rgba(255, 120, 120, 0.6);
   color: #ffd0d0;
 }
 
-.orbit-ui-overlay-count {
-  position: absolute;
-  top: 12px;
-  left: 12px;
+/* Preset count badge injected into the orbit-ui toolbar — visible in
+   both modes (orbit-ui or calque). Same proportions as Center / Random
+   buttons so the toolbar reads as one row. */
+.orbit-presets-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 23px;
+  min-width: 44px;
+  box-sizing: border-box;
   padding: 4px 10px;
-  border: 1px solid rgba(122, 215, 255, 0.25);
+  border: 1px solid #3a4a5f;
   border-radius: 999px;
-  background: rgba(20, 27, 37, 0.85);
-  color: #b9ccdf;
-  font-size: 11px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.04em;
-  pointer-events: none;
+  background: #1a2230;
+  color: #d7dde7;
+  font: inherit;
+  font-size: 0.6rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  user-select: none;
+  cursor: default;
 }
 
 .orbit-ui-overlay-name-input {

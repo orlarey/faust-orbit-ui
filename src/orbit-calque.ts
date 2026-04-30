@@ -57,6 +57,12 @@ export type OrbitCalqueOptions = {
    *  the preset to anonymous status). The host applies the change to
    *  the library entry and pushes the result back via setLibrary. */
   onPresetRename?: (configHash: string, name: string) => void;
+  /** User double-clicked empty calque space — capture the current
+   *  audible params as a new anonymous preset positioned at `projPos`
+   *  (projection-space coords). The PCA basis stays frozen for the
+   *  current calque session, so the host should `setLibrary` with the
+   *  preset added; the calque keeps it pinned at `projPos` until close. */
+  onCreatePresetAt?: (projPos: readonly [number, number]) => void;
   /** Optional gesture bracketing for host autosave / undo. */
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
@@ -68,8 +74,6 @@ export class OrbitCalque {
   private readonly overlay: HTMLDivElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
-  private readonly trashButton: HTMLButtonElement;
-  private readonly countBadge: HTMLDivElement;
   private readonly nameInput: HTMLInputElement;
   private readonly paramSpecs: ReadonlyArray<ParamSpec>;
   private readonly getCurrentParams: () => Record<string, number>;
@@ -77,6 +81,7 @@ export class OrbitCalque {
   private readonly onSelectionChangeCb: ((hashes: ReadonlyArray<string>) => void) | null;
   private readonly onTrashSelectedCb: (() => void) | null;
   private readonly onPresetRenameCb: ((configHash: string, name: string) => void) | null;
+  private readonly onCreatePresetAtCb: ((projPos: readonly [number, number]) => void) | null;
   private readonly onInteractionStart: (() => void) | null;
   private readonly onInteractionEnd: (() => void) | null;
   private readonly resizeObs: ResizeObserver;
@@ -91,7 +96,19 @@ export class OrbitCalque {
   private orderRank: Map<string, number> = new Map();
   private visible: boolean = false;
   private projection: Projection | null = null;
+  /** Raw projection-space positions, one per library entry. */
   private positions: ReadonlyArray<readonly [number, number]> = [];
+  /** Visual positions (still in projection space) after cluster-spread:
+   *  presets that fall within a small threshold of each other are fanned
+   *  out on a small circle so every disc stays individually clickable.
+   *  Used for rendering, hit-testing AND Shepard math (so d=0 snap aligns
+   *  with what the user sees). */
+  private visualPositions: ReadonlyArray<readonly [number, number]> = [];
+  /** Session-local visual positions for presets created by double-click
+   *  on empty calque space. Their config maps to the audible state at
+   *  click-time but the disc is pinned to where the user clicked. Cleared
+   *  on hide() and on every full projection recompute. */
+  private anchorOverrides: Map<string, readonly [number, number]> = new Map();
   private bounds: Bounds | null = null;
   private centerProj: readonly [number, number] | null = null;
   private dragMode: DragMode = 'none';
@@ -102,6 +119,10 @@ export class OrbitCalque {
   /** Zoom factor on the calque view (independent of the orbit-ui's own
    *  zoom). 1 = data fills the bounded canvas with no extra scaling. */
   private zoom: number = 1;
+  /** Projection-space point anchored at the canvas centre. When null,
+   *  bounds centre is used (default fit). Set on show() and by the
+   *  Center toolbar button (intercepted while the calque is visible). */
+  private viewportCenterProj: readonly [number, number] | null = null;
   private rafId: number | null = null;
 
   constructor(opts: OrbitCalqueOptions) {
@@ -112,6 +133,7 @@ export class OrbitCalque {
     this.onSelectionChangeCb = opts.onSelectionChange ?? null;
     this.onTrashSelectedCb = opts.onTrashSelected ?? null;
     this.onPresetRenameCb = opts.onPresetRename ?? null;
+    this.onCreatePresetAtCb = opts.onCreatePresetAt ?? null;
     this.onInteractionStart = opts.onInteractionStart ?? null;
     this.onInteractionEnd = opts.onInteractionEnd ?? null;
 
@@ -131,20 +153,6 @@ export class OrbitCalque {
     this.canvas.className = 'orbit-ui-overlay-canvas';
     this.overlay.appendChild(this.canvas);
 
-    this.trashButton = document.createElement('button');
-    this.trashButton.type = 'button';
-    this.trashButton.className = 'orbit-ui-overlay-trash';
-    this.trashButton.title = 'Delete selected presets (Delete)';
-    this.trashButton.textContent = '\u{1F5D1}';
-    this.trashButton.disabled = true;
-    this.trashButton.addEventListener('click', () => this.requestTrash());
-    this.overlay.appendChild(this.trashButton);
-
-    this.countBadge = document.createElement('div');
-    this.countBadge.className = 'orbit-ui-overlay-count';
-    this.overlay.appendChild(this.countBadge);
-    this.updateCountBadge();
-
     this.nameInput = document.createElement('input');
     this.nameInput.type = 'text';
     this.nameInput.className = 'orbit-ui-overlay-name-input';
@@ -156,9 +164,11 @@ export class OrbitCalque {
     this.canvas.addEventListener('dblclick', this.handleDoubleClick);
     this.canvas.addEventListener('pointerleave', this.handlePointerLeave);
 
-    // Capture-phase listener on the orbit-ui root so we pre-empt
-    // FaustOrbitUI's own zoom handler whenever the calque is active.
+    // Capture-phase listeners on the orbit-ui root so we pre-empt
+    // FaustOrbitUI's own zoom / center / random handlers whenever the
+    // calque is active. They drive calque-specific behavior instead.
     this.container.addEventListener('change', this.handleHeaderChange, { capture: true });
+    this.container.addEventListener('click', this.handleHeaderClick, { capture: true });
 
     this.orbitBody.appendChild(this.overlay);
 
@@ -181,15 +191,17 @@ export class OrbitCalque {
     this.library = records;
     this.recomputeOrderRank();
     // Drop selection entries that no longer reference an existing preset.
-    let pruned = false;
     const known = new Set(records.map((p) => p.configHash));
     for (const h of this.selection) {
-      if (!known.has(h)) { this.selection.delete(h); pruned = true; }
+      if (!known.has(h)) this.selection.delete(h);
     }
-    if (pruned) this.updateTrashButton();
-    this.updateCountBadge();
     if (this.visible) {
-      this.recomputeProjection();
+      // Calque is open → keep the PCA basis frozen so the existing
+      // arrangement of dots doesn't shuffle under the user's hands.
+      // Project the (possibly grown) library through the frozen basis
+      // and re-spread visually.
+      this.recomputeProjectedPositions();
+      this.recomputeVisualPositions();
       this.scheduleRender();
     }
   }
@@ -198,8 +210,6 @@ export class OrbitCalque {
    *  NOT emit onSelectionChange. */
   setSelection(configHashes: ReadonlyArray<string>): void {
     this.selection = new Set(configHashes);
-    this.updateTrashButton();
-    this.updateCountBadge();
     if (this.visible) this.scheduleRender();
   }
 
@@ -219,16 +229,15 @@ export class OrbitCalque {
     if (this.projection) {
       this.centerProj = projectConfig(this.getCurrentParams(), this.projection);
       this.expandBoundsForCenter();
+      // Anchor the viewport on the cross so it sits at canvas centre.
+      this.viewportCenterProj = this.centerProj;
     }
-    // Sync the calque zoom with the dropdown's current value so the user
-    // sees visual continuity with what they last chose.
     const zoomSelect = this.container.querySelector<HTMLSelectElement>('.orbit-zoom');
     if (zoomSelect) {
       const percent = Number(zoomSelect.value);
       if (Number.isFinite(percent) && percent > 0) this.zoom = percent / 100;
     }
     this.scheduleRender();
-    // Move focus into the overlay so the host's Cmd+Z routing sees it.
     this.overlay.focus({ preventScroll: true });
   }
 
@@ -240,6 +249,9 @@ export class OrbitCalque {
     this.overlay.style.display = 'none';
     this.dragMode = 'none';
     this.marquee = null;
+    // Drop session-local visual overrides — the next show() recomputes
+    // a fresh PCA basis where these coords are no longer meaningful.
+    this.anchorOverrides.clear();
   }
 
   /** Triggered by the host (OrbitUI) when Delete/Backspace is pressed
@@ -256,6 +268,7 @@ export class OrbitCalque {
     this.canvas.removeEventListener('dblclick', this.handleDoubleClick);
     this.canvas.removeEventListener('pointerleave', this.handlePointerLeave);
     this.container.removeEventListener('change', this.handleHeaderChange, { capture: true });
+    this.container.removeEventListener('click', this.handleHeaderClick, { capture: true });
     this.nameInput.removeEventListener('keydown', this.handleNameKeyDown);
     this.nameInput.removeEventListener('blur', this.handleNameBlur);
     this.resizeObs.disconnect();
@@ -266,11 +279,113 @@ export class OrbitCalque {
   // ------------------------------------------------------------------------
 
   private recomputeProjection(): void {
+    // Clear session-local anchor overrides — their projection coords are
+    // meaningful only against a specific basis. A new basis would put
+    // them in arbitrary places.
+    this.anchorOverrides.clear();
     this.projection = computeProjection(this.library, this.paramSpecs);
+    this.recomputeProjectedPositions();
+    this.bounds = computeBounds(this.positions);
+    this.recomputeVisualPositions();
+  }
+
+  private recomputeProjectedPositions(): void {
+    if (!this.projection) {
+      this.positions = [];
+      return;
+    }
     this.positions = this.library.map((p) =>
       projectConfig(p.configuration, this.projection!),
     );
-    this.bounds = computeBounds(this.positions);
+  }
+
+  /**
+   * Cluster-spread step: presets whose raw projection lands within
+   * ~4% of the bounds extent of each other are detected via a union-find
+   * and fanned out on a circle of ~2.5% extent radius, ordered by their
+   * lastSeenAt rank (so the angular arrangement is stable across redraws).
+   */
+  private recomputeVisualPositions(): void {
+    const n = this.library.length;
+    if (n === 0 || !this.bounds) {
+      this.visualPositions = [];
+      return;
+    }
+    const out: Array<readonly [number, number]> = new Array(n);
+    const xRange = this.bounds.maxX - this.bounds.minX;
+    const yRange = this.bounds.maxY - this.bounds.minY;
+    const extent = Math.max(xRange, yRange) || 1;
+    const threshold = 0.04 * extent;
+    const baseRadius = 0.025 * extent;
+
+    // Union-find on raw projection-space distance.
+    const parent: number[] = new Array(n);
+    for (let i = 0; i < n; i += 1) parent[i] = i;
+    const find = (i: number): number => {
+      let r = i;
+      while (parent[r] !== r) r = parent[r]!;
+      while (parent[i] !== r) {
+        const next = parent[i]!;
+        parent[i] = r;
+        i = next;
+      }
+      return r;
+    };
+    for (let i = 0; i < n; i += 1) {
+      for (let j = i + 1; j < n; j += 1) {
+        const a = this.positions[i]!;
+        const b = this.positions[j]!;
+        if (Math.hypot(a[0] - b[0], a[1] - b[1]) < threshold) {
+          const ri = find(i);
+          const rj = find(j);
+          if (ri !== rj) parent[ri] = rj;
+        }
+      }
+    }
+
+    const clusters = new Map<number, number[]>();
+    for (let i = 0; i < n; i += 1) {
+      const r = find(i);
+      let bucket = clusters.get(r);
+      if (!bucket) { bucket = []; clusters.set(r, bucket); }
+      bucket.push(i);
+    }
+
+    for (const members of clusters.values()) {
+      if (members.length === 1) {
+        const i = members[0]!;
+        out[i] = this.positions[i]!;
+        continue;
+      }
+      // Centroid in projection space.
+      let cx = 0, cy = 0;
+      for (const i of members) {
+        cx += this.positions[i]![0];
+        cy += this.positions[i]![1];
+      }
+      cx /= members.length;
+      cy /= members.length;
+      // Order members by their lastSeenAt rank for a stable angular layout.
+      const sorted = members.slice().sort((a, b) => {
+        const ra = this.orderRank.get(this.library[a]!.configHash) ?? a;
+        const rb = this.orderRank.get(this.library[b]!.configHash) ?? b;
+        return ra - rb;
+      });
+      const radius = Math.max(baseRadius, baseRadius * 0.4 * members.length);
+      for (let k = 0; k < sorted.length; k += 1) {
+        const angle = (k / sorted.length) * Math.PI * 2 - Math.PI / 2;
+        out[sorted[k]!] = [cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius];
+      }
+    }
+    // Anchor overrides win: presets created via double-click stay pinned
+    // at the click position regardless of what the projection says.
+    if (this.anchorOverrides.size > 0) {
+      for (let i = 0; i < n; i += 1) {
+        const ov = this.anchorOverrides.get(this.library[i]!.configHash);
+        if (ov) out[i] = ov;
+      }
+    }
+    this.visualPositions = out;
   }
 
   private expandBoundsForCenter(): void {
@@ -314,7 +429,7 @@ export class OrbitCalque {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
 
-    ctx.fillStyle = 'rgba(13, 16, 22, 0.78)';
+    ctx.fillStyle = 'rgba(13, 16, 22, 0.95)';
     ctx.fillRect(0, 0, cssW, cssH);
 
     if (!this.projection || !this.bounds) {
@@ -323,12 +438,12 @@ export class OrbitCalque {
       return;
     }
 
-    const map = makeProjToCanvas(this.bounds, cssW, cssH, this.zoom);
+    const map = makeProjToCanvas(this.bounds, cssW, cssH, this.zoom, this.viewportCenterProj);
     const weights = this.computeContributionWeights(map);
 
     for (let i = 0; i < this.library.length; i += 1) {
       const preset = this.library[i]!;
-      const pos = this.positions[i]!;
+      const pos = this.visualPositions[i]!;
       const px = map.x(pos[0]);
       const py = map.y(pos[1]);
       const w = weights[i] ?? 0;
@@ -417,7 +532,7 @@ export class OrbitCalque {
     const idx = this.hoveredIndex;
     if (idx < 0 || idx >= this.library.length) return;
     const preset = this.library[idx]!;
-    const pos = this.positions[idx];
+    const pos = this.visualPositions[idx];
     if (!pos) return;
     const px = map.x(pos[0]);
     const py = map.y(pos[1]);
@@ -479,7 +594,7 @@ export class OrbitCalque {
     const rect = this.canvas.getBoundingClientRect();
     const px = clientX - rect.left;
     const py = clientY - rect.top;
-    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom);
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom, this.viewportCenterProj);
     return [map.invX(px), map.invY(py)];
   }
 
@@ -488,11 +603,11 @@ export class OrbitCalque {
     const rect = this.canvas.getBoundingClientRect();
     const px = clientX - rect.left;
     const py = clientY - rect.top;
-    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom);
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom, this.viewportCenterProj);
     let best = -1;
     let bestD = POINT_HIT_RADIUS_PX;
-    for (let i = 0; i < this.positions.length; i += 1) {
-      const pos = this.positions[i]!;
+    for (let i = 0; i < this.visualPositions.length; i += 1) {
+      const pos = this.visualPositions[i]!;
       const dx = map.x(pos[0]) - px;
       const dy = map.y(pos[1]) - py;
       const d = Math.hypot(dx, dy);
@@ -506,7 +621,7 @@ export class OrbitCalque {
     const rect = this.canvas.getBoundingClientRect();
     const px = clientX - rect.left;
     const py = clientY - rect.top;
-    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom);
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom, this.viewportCenterProj);
     const cx = map.x(this.centerProj[0]);
     const cy = map.y(this.centerProj[1]);
     return Math.hypot(cx - px, cy - py) <= CENTER_HIT_RADIUS_PX;
@@ -523,7 +638,8 @@ export class OrbitCalque {
     this.canvas.setPointerCapture(e.pointerId);
 
     if (e.shiftKey) {
-      // Shift+click on a preset → toggle in selection. Else → start marquee.
+      // Shift+click on a preset → toggle in selection (additive).
+      // Shift+drag on empty → marquee, additive.
       const presetIdx = this.hitTestPreset(e.clientX, e.clientY);
       if (presetIdx >= 0) {
         const preset = this.library[presetIdx]!;
@@ -537,23 +653,38 @@ export class OrbitCalque {
       return;
     }
 
-    const presetIdx = this.hitTestPreset(e.clientX, e.clientY);
-    if (presetIdx >= 0) {
-      const preset = this.library[presetIdx]!;
-      const pos = this.positions[presetIdx]!;
-      this.centerProj = pos;
+    // Centre cross takes priority when it sits on top of a preset, so
+    // the user can still reposition it without triggering a recall.
+    if (this.hitTestCentre(e.clientX, e.clientY)) {
+      this.replaceSelection([]);
+      this.dragMode = 'centre';
       this.onInteractionStart?.();
-      this.onApply(completeConfig(preset.configuration, this.paramSpecs));
-      this.onInteractionEnd?.();
       this.scheduleRender();
       return;
     }
 
+    const presetIdx = this.hitTestPreset(e.clientX, e.clientY);
+    if (presetIdx >= 0) {
+      // Plain click on a preset: replace selection with {this preset},
+      // snap the centre to its visual position, recall its config, and
+      // continue as a centre drag so a press-and-drag flows naturally.
+      const preset = this.library[presetIdx]!;
+      const pos = this.visualPositions[presetIdx]!;
+      this.centerProj = pos;
+      this.replaceSelection([preset.configHash]);
+      this.dragMode = 'centre';
+      this.onInteractionStart?.();
+      this.onApply(completeConfig(preset.configuration, this.paramSpecs));
+      this.scheduleRender();
+      return;
+    }
+
+    // Plain click on empty space: clear selection and start a centre
+    // drag at the click point.
     const proj = this.canvasToProj(e.clientX, e.clientY);
     if (!proj) return;
-    if (!this.hitTestCentre(e.clientX, e.clientY)) {
-      this.centerProj = proj;
-    }
+    this.centerProj = proj;
+    this.replaceSelection([]);
     this.dragMode = 'centre';
     this.onInteractionStart?.();
     this.applyCentre();
@@ -608,6 +739,57 @@ export class OrbitCalque {
     this.scheduleRender();
   };
 
+  /**
+   * Pre-empt FaustOrbitUI's own Center / Random handlers while the
+   * calque is visible. Center pans the calque's viewport so the cross
+   * sits at canvas centre (no audio change). Random moves the cross to
+   * a random point inside the data bounds blended with the current
+   * position by the mix factor read from .orbit-random-mix, then applies
+   * the resulting Shepard config.
+   */
+  private handleHeaderClick = (e: Event): void => {
+    if (!this.visible) return;
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest('.orbit-center-btn')) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.actionCenter();
+      return;
+    }
+    if (target.closest('.orbit-random-btn')) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.actionRandom();
+      return;
+    }
+  };
+
+  private actionCenter(): void {
+    if (!this.centerProj) return;
+    this.viewportCenterProj = this.centerProj;
+    this.scheduleRender();
+  }
+
+  private actionRandom(): void {
+    if (!this.bounds || !this.centerProj || !this.projection) return;
+    if (this.projection.kind === 'empty') return;
+    const mixSelect = this.container.querySelector<HTMLSelectElement>('.orbit-random-mix');
+    const mixRaw = mixSelect ? Number(mixSelect.value) : 0.5;
+    const mix = Number.isFinite(mixRaw) ? Math.max(0, Math.min(1, mixRaw)) : 0.5;
+    const rx = this.bounds.minX + Math.random() * (this.bounds.maxX - this.bounds.minX);
+    const ry = this.bounds.minY + Math.random() * (this.bounds.maxY - this.bounds.minY);
+    const cur = this.centerProj;
+    this.centerProj = [
+      cur[0] + mix * (rx - cur[0]),
+      cur[1] + mix * (ry - cur[1]),
+    ];
+    this.onInteractionStart?.();
+    this.applyCentre();
+    this.onInteractionEnd?.();
+    this.scheduleRender();
+  }
+
   private handlePointerUp = (e: PointerEvent): void => {
     if (this.canvas.hasPointerCapture(e.pointerId)) {
       this.canvas.releasePointerCapture(e.pointerId);
@@ -633,10 +815,10 @@ export class OrbitCalque {
     const y0 = Math.min(m.startY, m.endY);
     const y1 = Math.max(m.startY, m.endY);
     const rect = this.canvas.getBoundingClientRect();
-    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom);
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom, this.viewportCenterProj);
     let mutated = false;
     for (let i = 0; i < this.library.length; i += 1) {
-      const pos = this.positions[i]!;
+      const pos = this.visualPositions[i]!;
       const cx = map.x(pos[0]);
       const cy = map.y(pos[1]);
       if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) {
@@ -650,6 +832,21 @@ export class OrbitCalque {
     if (mutated) this.emitSelection();
   }
 
+  private replaceSelection(hashes: ReadonlyArray<string>): void {
+    const prev = this.selection;
+    if (prev.size === hashes.length) {
+      let same = true;
+      const it = prev.values();
+      for (let i = 0; i < hashes.length; i += 1) {
+        if (it.next().value !== hashes[i]) { same = false; break; }
+      }
+      if (same) return;
+    }
+    this.selection = new Set(hashes);
+    this.emitSelection();
+    this.scheduleRender();
+  }
+
   private toggleInSelection(configHash: string): void {
     if (this.selection.has(configHash)) this.selection.delete(configHash);
     else this.selection.add(configHash);
@@ -658,22 +855,9 @@ export class OrbitCalque {
   }
 
   private emitSelection(): void {
-    this.updateTrashButton();
-    this.updateCountBadge();
     this.onSelectionChangeCb?.(Array.from(this.selection));
   }
 
-  private updateTrashButton(): void {
-    this.trashButton.disabled = this.selection.size === 0;
-  }
-
-  private updateCountBadge(): void {
-    const total = this.library.length;
-    const sel = this.selection.size;
-    this.countBadge.textContent = sel > 0
-      ? `${total} preset${total === 1 ? '' : 's'} · ${sel} selected`
-      : `${total} preset${total === 1 ? '' : 's'}`;
-  }
 
   private recomputeOrderRank(): void {
     const sorted = this.library
@@ -695,7 +879,7 @@ export class OrbitCalque {
     const cfg = shepardInterpolate(
       this.centerProj,
       this.library,
-      this.positions,
+      this.visualPositions,
       this.paramSpecs,
     );
     this.onApply(cfg);
@@ -714,7 +898,7 @@ export class OrbitCalque {
     const cy = map.y(this.centerProj[1]);
     const distances: number[] = new Array(n);
     for (let i = 0; i < n; i += 1) {
-      const pos = this.positions[i]!;
+      const pos = this.visualPositions[i]!;
       distances[i] = Math.hypot(map.x(pos[0]) - cx, map.y(pos[1]) - cy);
     }
     for (let i = 0; i < n; i += 1) {
@@ -731,23 +915,42 @@ export class OrbitCalque {
   }
 
   private handleDoubleClick = (e: MouseEvent): void => {
-    if (!this.visible || !this.bounds) return;
+    if (!this.visible || !this.bounds || !this.projection) return;
     if (e.shiftKey) return;
-    const idx = this.hitTestPreset(e.clientX, e.clientY);
-    if (idx < 0) return;
     e.preventDefault();
     e.stopPropagation();
-    this.startNameEditing(idx);
+    const idx = this.hitTestPreset(e.clientX, e.clientY);
+    if (idx >= 0) {
+      // Double-click on a preset → rename it.
+      this.startNameEditing(idx);
+      return;
+    }
+    // Double-click on empty space → ask the host to create a preset
+    // capturing the current audible state. The disc is pinned at the
+    // click position via anchorOverrides until the calque closes.
+    const proj = this.canvasToProj(e.clientX, e.clientY);
+    if (!proj) return;
+    this.onCreatePresetAtCb?.(proj);
   };
+
+  /** Called by the host (OrbitUI) right after it inserts the new preset
+   *  — registers the visual anchor so the disc lands at the click. */
+  registerAnchorOverride(configHash: string, projPos: readonly [number, number]): void {
+    this.anchorOverrides.set(configHash, projPos);
+    if (this.visible) {
+      this.recomputeVisualPositions();
+      this.scheduleRender();
+    }
+  }
 
   private startNameEditing(presetIndex: number): void {
     if (!this.bounds) return;
     const preset = this.library[presetIndex];
-    const pos = this.positions[presetIndex];
+    const pos = this.visualPositions[presetIndex];
     if (!preset || !pos) return;
     this.editingHash = preset.configHash;
     const rect = this.canvas.getBoundingClientRect();
-    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom);
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom, this.viewportCenterProj);
     const px = map.x(pos[0]);
     const py = map.y(pos[1]);
     const inputW = 140;
@@ -849,15 +1052,21 @@ function roundRect(
   ctx.closePath();
 }
 
-function makeProjToCanvas(b: Bounds, w: number, h: number, zoom: number = 1) {
+function makeProjToCanvas(
+  b: Bounds,
+  w: number,
+  h: number,
+  zoom: number = 1,
+  viewport: readonly [number, number] | null = null,
+) {
   const innerW = Math.max(1, w - 2 * MARGIN_PX);
   const innerH = Math.max(1, h - 2 * MARGIN_PX);
   const spanX = b.maxX - b.minX || 1;
   const spanY = b.maxY - b.minY || 1;
   const baseScale = Math.min(innerW / spanX, innerH / spanY);
   const scale = baseScale * Math.max(0.01, zoom);
-  const cx = (b.minX + b.maxX) / 2;
-  const cy = (b.minY + b.maxY) / 2;
+  const cx = viewport ? viewport[0] : (b.minX + b.maxX) / 2;
+  const cy = viewport ? viewport[1] : (b.minY + b.maxY) / 2;
   const cw = w / 2;
   const ch = h / 2;
   return {

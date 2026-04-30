@@ -249,11 +249,10 @@ export class FaustOrbitUI extends FaustUICore {
     this.root.innerHTML = `
       <div class="orbit-wrap">
         <div class="orbit-header">
-          <span class="orbit-title">Orbit UI</span>
           <div class="orbit-middle-actions">
-            <button type="button" class="orbit-center-btn">Center</button>
+            <button type="button" class="orbit-center-btn" aria-label="Center" title="Center"><span class="material-symbols-outlined">my_location</span></button>
             <div class="orbit-random-group">
-              <button type="button" class="orbit-random-btn">Random</button>
+              <button type="button" class="orbit-random-btn" aria-label="Random" title="Random"><span class="material-symbols-outlined">casino</span></button>
               <select class="orbit-random-mix" aria-label="Random coefficient">
                 <option value="0.25">0.25</option>
                 <option value="0.5" selected>0.5</option>
@@ -264,7 +263,7 @@ export class FaustOrbitUI extends FaustUICore {
           </div>
           <div class="orbit-zoom-wrap">
             <div class="orbit-zoom-group" aria-label="Zoom selector">
-              <span class="orbit-zoom-label">Zoom</span>
+              <span class="orbit-zoom-label material-symbols-outlined" aria-label="Zoom" title="Zoom">zoom_in</span>
               <select class="orbit-zoom">
                 <option value="75">75%</option>
                 <option value="100">100%</option>
@@ -309,14 +308,7 @@ export class FaustOrbitUI extends FaustUICore {
     this.centerButton = centerButton;
     this.randomButton = randomButton;
     this.randomMixSelect = randomMixSelect;
-    const titleEl = this.root.querySelector('.orbit-title');
-    if (titleEl) {
-      if (title) {
-        titleEl.textContent = title;
-      } else {
-        (titleEl as HTMLElement).style.display = 'none';
-      }
-    }
+    void title; // legacy `title` option no-op since the header has no title slot anymore.
     if (this.tooltips.centerButton) this.centerButton.title = this.tooltips.centerButton;
     if (this.tooltips.randomButton) this.randomButton.title = this.tooltips.randomButton;
     if (this.tooltips.randomMix) this.randomMixSelect.title = this.tooltips.randomMix;
@@ -722,10 +714,14 @@ export class FaustOrbitUI extends FaustUICore {
     });
   }
 
-  // Installs a resize observer and performs initial canvas sizing.
+  // Installs a resize observer and performs initial canvas sizing. We
+  // observe `this.body` (the canvas's container) — the canvas's own size
+  // is set programmatically from JS, so observing it would never fire on
+  // a layout change. The body, in contrast, follows its parent's flex /
+  // grid box and reports every external resize.
   _installResizeObserver(): void {
     this.resizeObserver = new ResizeObserver(() => this.resize());
-    this.resizeObserver.observe(this.canvas);
+    this.resizeObserver.observe(this.body);
     this._resizeCanvas();
   }
 

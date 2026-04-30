@@ -22,6 +22,7 @@ import { OrbitCalque } from './orbit-calque.js';
 import { extractParamSpecs, type ParamSpec } from './orbit-projection.js';
 import { PresetPromotionTracker } from './orbit-promotion.js';
 import { LibraryUndoScope, type LibraryOp } from './orbit-library-undo.js';
+import { computeConfigHashSync } from './orbit-hash.js';
 import type { Preset, SelectionEntry } from './orbit-types.js';
 
 const PROMOTION_TICK_MS = 500;
@@ -60,6 +61,8 @@ export class OrbitUI {
   private readonly userOnParamChange: (path: string, value: number) => void;
   private readonly calque: OrbitCalque;
   private readonly toggleButton: HTMLButtonElement;
+  private readonly trashButton: HTMLButtonElement;
+  private readonly presetsBadge: HTMLSpanElement;
   private readonly onKeyDown: (e: KeyboardEvent) => void;
   private readonly tracker: PresetPromotionTracker;
   private readonly libraryUndo: LibraryUndoScope;
@@ -118,11 +121,16 @@ export class OrbitUI {
       onSelectionChange: (hashes) => this.handleCalqueSelectionChange(hashes),
       onTrashSelected: () => this.handleTrashSelected(),
       onPresetRename: (hash, name) => this.handlePresetRename(hash, name),
+      onCreatePresetAt: (projPos) => this.handleCreatePresetAt(projPos),
       onInteractionStart: wrappedStart,
       onInteractionEnd: wrappedEnd,
     });
 
     this.toggleButton = this.injectLibraryButton();
+    this.trashButton = this.injectTrashButton();
+    this.presetsBadge = this.injectPresetsBadge();
+    this.updatePresetsBadge();
+    this.updateTrashButtonVisibility();
     this.onKeyDown = (e) => this.handleKeyDown(e);
     this.container.addEventListener('keydown', this.onKeyDown);
 
@@ -148,6 +156,7 @@ export class OrbitUI {
     this.calque.setLibrary(this.libraryArray());
     this.selection = this.selection.filter((h) => this.library.has(h));
     this.calque.setSelection(this.selection);
+    this.updatePresetsBadge();
   }
 
   setSelection(entries: readonly SelectionEntry[]): void {
@@ -165,6 +174,7 @@ export class OrbitUI {
       this.selection.push(h);
     }
     this.calque.setSelection(this.selection);
+    this.updatePresetsBadge();
   }
 
   getLibrary(): Preset[] { return this.libraryArray(); }
@@ -200,6 +210,8 @@ export class OrbitUI {
     }
     this.container.removeEventListener('keydown', this.onKeyDown);
     this.toggleButton.remove();
+    this.trashButton.remove();
+    this.presetsBadge.remove();
     this.calque.destroy();
     this.inner.destroy();
     this.container.classList.remove('orbit-ui-root');
@@ -223,6 +235,7 @@ export class OrbitUI {
 
   private emitLibraryChange(): void {
     this.calque.setLibrary(this.libraryArray());
+    this.updatePresetsBadge();
     this.onLibraryChange?.(this.libraryArray());
   }
 
@@ -242,6 +255,7 @@ export class OrbitUI {
       seen.add(h);
       this.selection.push(h);
     }
+    this.updatePresetsBadge();
     this.onSelectionChangeUser?.(this.selectionEntries());
   }
 
@@ -258,6 +272,30 @@ export class OrbitUI {
       prevName: existing.name,
       nextName,
     });
+    this.emitLibraryChange();
+  }
+
+  private handleCreatePresetAt(projPos: readonly [number, number]): void {
+    const configuration = { ...this.inner.getParamValues() };
+    const configHash = computeConfigHashSync(configuration);
+    if (this.library.has(configHash)) {
+      // Already known — just refresh lastSeenAt, anchor the existing
+      // disc at the new position so the user sees feedback at click.
+      const existing = this.library.get(configHash)!;
+      this.library.set(configHash, { ...existing, lastSeenAt: Date.now() });
+      this.calque.registerAnchorOverride(configHash, projPos);
+      this.emitLibraryChange();
+      return;
+    }
+    const preset: Preset = {
+      uiHash: this.uiHash,
+      configHash,
+      lastSeenAt: Date.now(),
+      configuration,
+    };
+    this.library.set(configHash, preset);
+    this.libraryUndo.record({ kind: 'add', record: preset });
+    this.calque.registerAnchorOverride(configHash, projPos);
     this.emitLibraryChange();
   }
 
@@ -357,14 +395,56 @@ export class OrbitUI {
     }
   }
 
+  private injectTrashButton(): HTMLButtonElement {
+    const middle = this.container.querySelector<HTMLElement>('.orbit-middle-actions');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'orbit-trash-btn';
+    button.title = 'Delete selected presets (Delete)';
+    button.setAttribute('aria-label', 'Delete selected presets');
+    const icon = document.createElement('span');
+    icon.className = 'material-symbols-outlined';
+    icon.textContent = 'delete';
+    button.appendChild(icon);
+    button.addEventListener('click', () => this.handleTrashSelected());
+    if (middle) middle.appendChild(button);
+    else this.container.appendChild(button);
+    return button;
+  }
+
+  private updateTrashButtonVisibility(): void {
+    this.trashButton.hidden = this.selection.length === 0;
+  }
+
+  private injectPresetsBadge(): HTMLSpanElement {
+    const middle = this.container.querySelector<HTMLElement>('.orbit-middle-actions');
+    const span = document.createElement('span');
+    span.className = 'orbit-presets-count';
+    span.title = 'Memorised presets for this signature';
+    if (middle) middle.appendChild(span);
+    else this.container.appendChild(span);
+    return span;
+  }
+
+  private updatePresetsBadge(): void {
+    const total = this.library.size;
+    const sel = this.selection.length;
+    this.presetsBadge.textContent = sel > 0 ? `${sel}/${total}` : String(total);
+    this.updateTrashButtonVisibility();
+  }
+
   private injectLibraryButton(): HTMLButtonElement {
     const middle = this.container.querySelector<HTMLElement>('.orbit-middle-actions');
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'orbit-library-btn';
-    button.textContent = 'Library';
+    button.setAttribute('aria-label', 'Library');
     button.title = 'Toggle preset library overlay (L)';
     button.setAttribute('aria-pressed', 'false');
+    const icon = document.createElement('span');
+    icon.className = 'material-symbols-outlined';
+    icon.textContent = 'bubble_chart';
+    button.appendChild(icon);
     button.addEventListener('click', () => {
       this.calque.toggle();
       this.syncCalqueState();
