@@ -69,6 +69,7 @@ export class OrbitCalque {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly trashButton: HTMLButtonElement;
+  private readonly countBadge: HTMLDivElement;
   private readonly nameInput: HTMLInputElement;
   private readonly paramSpecs: ReadonlyArray<ParamSpec>;
   private readonly getCurrentParams: () => Record<string, number>;
@@ -85,6 +86,9 @@ export class OrbitCalque {
   private library: ReadonlyArray<Preset> = [];
   /** Insertion-ordered set of selected configHashes. */
   private selection: Set<string> = new Set();
+  /** Rank of each preset in `lastSeenAt`-ascending order (1-based).
+   *  Used for the order-digit overlay and for cursor arrow nav. */
+  private orderRank: Map<string, number> = new Map();
   private visible: boolean = false;
   private projection: Projection | null = null;
   private positions: ReadonlyArray<readonly [number, number]> = [];
@@ -93,6 +97,11 @@ export class OrbitCalque {
   private dragMode: DragMode = 'none';
   /** Marquee rectangle in canvas (CSS-pixel) coordinates. */
   private marquee: { startX: number; startY: number; endX: number; endY: number } | null = null;
+  /** Index of the preset currently under the pointer (no drag in flight). */
+  private hoveredIndex: number = -1;
+  /** Zoom factor on the calque view (independent of the orbit-ui's own
+   *  zoom). 1 = data fills the bounded canvas with no extra scaling. */
+  private zoom: number = 1;
   private rafId: number | null = null;
 
   constructor(opts: OrbitCalqueOptions) {
@@ -131,6 +140,11 @@ export class OrbitCalque {
     this.trashButton.addEventListener('click', () => this.requestTrash());
     this.overlay.appendChild(this.trashButton);
 
+    this.countBadge = document.createElement('div');
+    this.countBadge.className = 'orbit-ui-overlay-count';
+    this.overlay.appendChild(this.countBadge);
+    this.updateCountBadge();
+
     this.nameInput = document.createElement('input');
     this.nameInput.type = 'text';
     this.nameInput.className = 'orbit-ui-overlay-name-input';
@@ -140,6 +154,11 @@ export class OrbitCalque {
     this.overlay.appendChild(this.nameInput);
 
     this.canvas.addEventListener('dblclick', this.handleDoubleClick);
+    this.canvas.addEventListener('pointerleave', this.handlePointerLeave);
+
+    // Capture-phase listener on the orbit-ui root so we pre-empt
+    // FaustOrbitUI's own zoom handler whenever the calque is active.
+    this.container.addEventListener('change', this.handleHeaderChange, { capture: true });
 
     this.orbitBody.appendChild(this.overlay);
 
@@ -160,6 +179,7 @@ export class OrbitCalque {
 
   setLibrary(records: ReadonlyArray<Preset>): void {
     this.library = records;
+    this.recomputeOrderRank();
     // Drop selection entries that no longer reference an existing preset.
     let pruned = false;
     const known = new Set(records.map((p) => p.configHash));
@@ -167,6 +187,7 @@ export class OrbitCalque {
       if (!known.has(h)) { this.selection.delete(h); pruned = true; }
     }
     if (pruned) this.updateTrashButton();
+    this.updateCountBadge();
     if (this.visible) {
       this.recomputeProjection();
       this.scheduleRender();
@@ -178,6 +199,7 @@ export class OrbitCalque {
   setSelection(configHashes: ReadonlyArray<string>): void {
     this.selection = new Set(configHashes);
     this.updateTrashButton();
+    this.updateCountBadge();
     if (this.visible) this.scheduleRender();
   }
 
@@ -197,6 +219,13 @@ export class OrbitCalque {
     if (this.projection) {
       this.centerProj = projectConfig(this.getCurrentParams(), this.projection);
       this.expandBoundsForCenter();
+    }
+    // Sync the calque zoom with the dropdown's current value so the user
+    // sees visual continuity with what they last chose.
+    const zoomSelect = this.container.querySelector<HTMLSelectElement>('.orbit-zoom');
+    if (zoomSelect) {
+      const percent = Number(zoomSelect.value);
+      if (Number.isFinite(percent) && percent > 0) this.zoom = percent / 100;
     }
     this.scheduleRender();
     // Move focus into the overlay so the host's Cmd+Z routing sees it.
@@ -225,6 +254,8 @@ export class OrbitCalque {
     this.canvas.removeEventListener('pointerup', this.handlePointerUp);
     this.canvas.removeEventListener('pointercancel', this.handlePointerUp);
     this.canvas.removeEventListener('dblclick', this.handleDoubleClick);
+    this.canvas.removeEventListener('pointerleave', this.handlePointerLeave);
+    this.container.removeEventListener('change', this.handleHeaderChange, { capture: true });
     this.nameInput.removeEventListener('keydown', this.handleNameKeyDown);
     this.nameInput.removeEventListener('blur', this.handleNameBlur);
     this.resizeObs.disconnect();
@@ -292,7 +323,7 @@ export class OrbitCalque {
       return;
     }
 
-    const map = makeProjToCanvas(this.bounds, cssW, cssH);
+    const map = makeProjToCanvas(this.bounds, cssW, cssH, this.zoom);
     const weights = this.computeContributionWeights(map);
 
     for (let i = 0; i < this.library.length; i += 1) {
@@ -339,7 +370,19 @@ export class OrbitCalque {
       ctx.lineWidth = 1;
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
       ctx.stroke();
+
+      // Order-rank digit (1-based, lastSeenAt ascending).
+      const rank = this.orderRank.get(preset.configHash);
+      if (rank !== undefined) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
+        ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(rank), px, py + 0.5);
+      }
     }
+
+    this.drawHoverTooltip(ctx, map, cssW, cssH);
 
     if (this.centerProj) {
       const cx = map.x(this.centerProj[0]);
@@ -362,6 +405,47 @@ export class OrbitCalque {
     if (this.library.length === 0) {
       this.drawHint(ctx, cssW, cssH, 'Library is empty');
     }
+  }
+
+  private drawHoverTooltip(
+    ctx: CanvasRenderingContext2D,
+    map: ReturnType<typeof makeProjToCanvas>,
+    cssW: number,
+    cssH: number,
+  ): void {
+    if (this.dragMode !== 'none') return;
+    const idx = this.hoveredIndex;
+    if (idx < 0 || idx >= this.library.length) return;
+    const preset = this.library[idx]!;
+    const pos = this.positions[idx];
+    if (!pos) return;
+    const px = map.x(pos[0]);
+    const py = map.y(pos[1]);
+    const named = typeof preset.name === 'string' && preset.name.length > 0;
+    const label = named ? preset.name! : '(anon)';
+    ctx.font = '12px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const padX = 7;
+    const metrics = ctx.measureText(label);
+    const w = Math.ceil(metrics.width) + padX * 2;
+    const h = 18;
+    let cx = px;
+    let cy = py + RING_RADIUS_PX + 14;
+    // Flip above the disc when there isn't room below.
+    if (cy + h / 2 > cssH - 4) cy = py - RING_RADIUS_PX - 14;
+    // Keep the box on-canvas horizontally.
+    cx = Math.max(w / 2 + 4, Math.min(cssW - w / 2 - 4, cx));
+    const x = cx - w / 2;
+    const y = cy - h / 2;
+    ctx.fillStyle = 'rgba(20, 27, 37, 0.95)';
+    ctx.strokeStyle = named ? 'rgba(232, 197, 98, 0.7)' : 'rgba(232, 110, 158, 0.6)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, x, y, w, h, 5);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = named ? '#f4e8c8' : '#f6d9e6';
+    ctx.fillText(label, cx, cy);
   }
 
   private drawMarquee(ctx: CanvasRenderingContext2D): void {
@@ -395,7 +479,7 @@ export class OrbitCalque {
     const rect = this.canvas.getBoundingClientRect();
     const px = clientX - rect.left;
     const py = clientY - rect.top;
-    const map = makeProjToCanvas(this.bounds, rect.width, rect.height);
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom);
     return [map.invX(px), map.invY(py)];
   }
 
@@ -404,7 +488,7 @@ export class OrbitCalque {
     const rect = this.canvas.getBoundingClientRect();
     const px = clientX - rect.left;
     const py = clientY - rect.top;
-    const map = makeProjToCanvas(this.bounds, rect.width, rect.height);
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom);
     let best = -1;
     let bestD = POINT_HIT_RADIUS_PX;
     for (let i = 0; i < this.positions.length; i += 1) {
@@ -422,7 +506,7 @@ export class OrbitCalque {
     const rect = this.canvas.getBoundingClientRect();
     const px = clientX - rect.left;
     const py = clientY - rect.top;
-    const map = makeProjToCanvas(this.bounds, rect.width, rect.height);
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom);
     const cx = map.x(this.centerProj[0]);
     const cy = map.y(this.centerProj[1]);
     return Math.hypot(cx - px, cy - py) <= CENTER_HIT_RADIUS_PX;
@@ -489,7 +573,39 @@ export class OrbitCalque {
       const p = this.canvasPoint(e.clientX, e.clientY);
       this.marquee = { ...this.marquee, endX: p.x, endY: p.y };
       this.scheduleRender();
+      return;
     }
+    // Idle: track hover for the tooltip.
+    const idx = this.hitTestPreset(e.clientX, e.clientY);
+    if (idx !== this.hoveredIndex) {
+      this.hoveredIndex = idx;
+      this.scheduleRender();
+    }
+  };
+
+  private handlePointerLeave = (): void => {
+    if (this.hoveredIndex !== -1) {
+      this.hoveredIndex = -1;
+      this.scheduleRender();
+    }
+  };
+
+  /**
+   * Pre-empt FaustOrbitUI's own zoom handler while the calque is visible —
+   * the dropdown drives only the calque's zoom in that mode. Capture-phase
+   * + stopPropagation keep the inner handler from firing.
+   */
+  private handleHeaderChange = (e: Event): void => {
+    if (!this.visible) return;
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    if (!target.classList.contains('orbit-zoom')) return;
+    e.stopPropagation();
+    const select = target as HTMLSelectElement;
+    const percent = Number(select.value);
+    if (!Number.isFinite(percent) || percent <= 0) return;
+    this.zoom = percent / 100;
+    this.scheduleRender();
   };
 
   private handlePointerUp = (e: PointerEvent): void => {
@@ -517,7 +633,7 @@ export class OrbitCalque {
     const y0 = Math.min(m.startY, m.endY);
     const y1 = Math.max(m.startY, m.endY);
     const rect = this.canvas.getBoundingClientRect();
-    const map = makeProjToCanvas(this.bounds, rect.width, rect.height);
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom);
     let mutated = false;
     for (let i = 0; i < this.library.length; i += 1) {
       const pos = this.positions[i]!;
@@ -543,11 +659,30 @@ export class OrbitCalque {
 
   private emitSelection(): void {
     this.updateTrashButton();
+    this.updateCountBadge();
     this.onSelectionChangeCb?.(Array.from(this.selection));
   }
 
   private updateTrashButton(): void {
     this.trashButton.disabled = this.selection.size === 0;
+  }
+
+  private updateCountBadge(): void {
+    const total = this.library.length;
+    const sel = this.selection.size;
+    this.countBadge.textContent = sel > 0
+      ? `${total} preset${total === 1 ? '' : 's'} · ${sel} selected`
+      : `${total} preset${total === 1 ? '' : 's'}`;
+  }
+
+  private recomputeOrderRank(): void {
+    const sorted = this.library
+      .map((p, i) => [p.configHash, p.lastSeenAt, i] as const)
+      .sort((a, b) => a[1] - b[1] || a[2] - b[2]);
+    this.orderRank.clear();
+    for (let i = 0; i < sorted.length; i += 1) {
+      this.orderRank.set(sorted[i]![0], i + 1);
+    }
   }
 
   private requestTrash(): void {
@@ -612,7 +747,7 @@ export class OrbitCalque {
     if (!preset || !pos) return;
     this.editingHash = preset.configHash;
     const rect = this.canvas.getBoundingClientRect();
-    const map = makeProjToCanvas(this.bounds, rect.width, rect.height);
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom);
     const px = map.x(pos[0]);
     const py = map.y(pos[1]);
     const inputW = 140;
@@ -696,12 +831,31 @@ function computeBounds(points: ReadonlyArray<readonly [number, number]>): Bounds
   };
 }
 
-function makeProjToCanvas(b: Bounds, w: number, h: number) {
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number, r: number,
+): void {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
+}
+
+function makeProjToCanvas(b: Bounds, w: number, h: number, zoom: number = 1) {
   const innerW = Math.max(1, w - 2 * MARGIN_PX);
   const innerH = Math.max(1, h - 2 * MARGIN_PX);
   const spanX = b.maxX - b.minX || 1;
   const spanY = b.maxY - b.minY || 1;
-  const scale = Math.min(innerW / spanX, innerH / spanY);
+  const baseScale = Math.min(innerW / spanX, innerH / spanY);
+  const scale = baseScale * Math.max(0.01, zoom);
   const cx = (b.minX + b.maxX) / 2;
   const cy = (b.minY + b.maxY) / 2;
   const cw = w / 2;
