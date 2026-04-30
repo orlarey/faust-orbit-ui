@@ -4,4 +4,5 @@ export * from './faust-orbit-ui.js';
 export * from './orbit-types.js';
 export * from './orbit-projection.js';
 export * from './orbit-calque.js';
+export * from './orbit-promotion.js';
 export * from './orbit-ui.js';
