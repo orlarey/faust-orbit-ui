@@ -98,7 +98,7 @@ export type OrbitCalqueOptions = {
 export class OrbitCalque {
   private readonly container: HTMLElement;
   private readonly orbitBody: HTMLElement;
-  private readonly orbitDetail: HTMLElement;
+  private readonly orbitWrap: HTMLElement;
   private readonly overlay: HTMLDivElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -193,11 +193,11 @@ export class OrbitCalque {
       throw new Error('OrbitCalque: .orbit-body not found inside container');
     }
     this.orbitBody = body;
-    const detail = this.container.querySelector<HTMLElement>('.orbit-detail');
-    if (!detail) {
-      throw new Error('OrbitCalque: .orbit-detail not found inside container');
+    const wrap = this.container.querySelector<HTMLElement>('.orbit-wrap');
+    if (!wrap) {
+      throw new Error('OrbitCalque: .orbit-wrap not found inside container');
     }
-    this.orbitDetail = detail;
+    this.orbitWrap = wrap;
 
     this.overlay = document.createElement('div');
     this.overlay.className = 'orbit-ui-overlay';
@@ -307,10 +307,12 @@ export class OrbitCalque {
     this.portamentoBar.appendChild(loopIcon);
 
     this.portamentoBar.style.display = 'none';
-    // Append to .orbit-detail (with position:relative set in CSS) so the
-    // bar overlays the orbit-ui's own detail-slider area while the calque
-    // is open — same convention as webdaw.
-    this.orbitDetail.appendChild(this.portamentoBar);
+    // Append to .orbit-wrap (positioning context) so the bar covers the
+    // bottom 48 px (where .orbit-detail sits) while the calque is open.
+    // Critically NOT inside .orbit-detail itself: FaustOrbitUI rewrites
+    // its innerHTML when a parameter is selected for detail editing,
+    // which would wipe the bar.
+    this.orbitWrap.appendChild(this.portamentoBar);
 
     this.overlay.addEventListener('keydown', this.handleOverlayKeyDown);
 
@@ -419,6 +421,30 @@ export class OrbitCalque {
    *  while the calque has focus. Equivalent to clicking the trash button. */
   trashSelected(): void {
     this.requestTrash();
+  }
+
+  /**
+   * Recall a preset as if the user had clicked its disc directly: snap
+   * the centre to the preset's visual position, replace the selection
+   * with `{configHash}`, and apply the preset's configuration. The host
+   * (OrbitUI) calls this when the recall menu is used while the calque
+   * is open. No-op if the preset isn't in the library.
+   *
+   * The caller is responsible for gesture bracketing (interaction
+   * start/end) — this method does not call `onInteractionStart/End`.
+   */
+  recallByHash(configHash: string): void {
+    if (!this.projection) return;
+    const idx = this.library.findIndex((p) => p.configHash === configHash);
+    if (idx < 0) return;
+    const preset = this.library[idx]!;
+    const pos = this.visualPositions[idx];
+    if (!pos) return;
+    this.centerProj = pos;
+    this.selection = new Set([configHash]);
+    this.emitSelection();
+    this.onApply(completeConfig(preset.configuration, this.paramSpecs));
+    this.scheduleRender();
   }
 
   destroy(): void {

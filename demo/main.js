@@ -41,6 +41,15 @@ async function main() {
     onSelectionChange: (entries) => {
       log('selection', `count=${entries.length}`);
     },
+    onCommit: (cfg) => {
+      const summary = Object.entries(cfg)
+        .map(([k, v]) => `${k.split('/').pop()}=${v.toFixed(2)}`)
+        .join(' ');
+      log('commit', summary);
+    },
+    onTrajectoryChange: (record) => {
+      log('trajectory', `events=${record.events.length} head=${record.headIndex}`);
+    },
   });
 
   log('library', `uiHash=${orbit.uiHash.slice(0, 12)}…`);

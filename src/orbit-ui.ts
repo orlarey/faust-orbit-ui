@@ -23,9 +23,18 @@ import { extractParamSpecs, type ParamSpec } from './orbit-projection.js';
 import { PresetPromotionTracker } from './orbit-promotion.js';
 import { LibraryUndoScope, type LibraryOp } from './orbit-library-undo.js';
 import { computeConfigHashSync } from './orbit-hash.js';
-import type { Preset, SelectionEntry } from './orbit-types.js';
+import { enableCustomDropdown, openDropdownMenu, type DropdownItem } from './orbit-dropdown.js';
+import type {
+  Preset,
+  SelectionEntry,
+  TrajectoryEvent,
+  TrajectoryRecord,
+} from './orbit-types.js';
 
 const PROMOTION_TICK_MS = 500;
+/** FIFO eviction threshold for the trajectory event log (per
+ *  ORBITDATAMODELSPEC §C). The oldest events are dropped beyond this. */
+const TRAJECTORY_MAX_EVENTS = 500;
 
 export type OrbitUIOptions = {
   /** Raw Faust UI descriptor (the `runtime.ui` array from faustwasm). */
@@ -47,6 +56,20 @@ export type OrbitUIOptions = {
    *  (shift+click, shift+drag marquee, trash). NOT emitted in response
    *  to `setSelection` — sync-in only. */
   onSelectionChange?: (entries: SelectionEntry[]) => void;
+
+  /** Emitted at the end of every gesture that settles a configuration
+   *  (knob drag release, calque centre drag release, click-to-recall,
+   *  arrow-nav step end, recall-menu pick, …). Carries the configuration
+   *  the gesture committed to. Useful for analytics and badges; for the
+   *  authoritative trajectory state see `onTrajectoryChange`. */
+  onCommit?: (configuration: Readonly<Record<string, number>>) => void;
+
+  /** Emitted whenever the trajectory log mutates (a new commit appended,
+   *  or a navigation cursor move). The host receives the full record
+   *  and is responsible for persisting it (per `(sessionId, instanceId)`
+   *  or whatever key it uses). NOT emitted in response to
+   *  `setTrajectory` — sync-in only. */
+  onTrajectoryChange?: (record: TrajectoryRecord) => void;
 };
 
 export class OrbitUI {
@@ -57,21 +80,29 @@ export class OrbitUI {
   private readonly container: HTMLElement;
   private readonly onLibraryChange: ((records: Preset[]) => void) | null;
   private readonly onSelectionChangeUser: ((entries: SelectionEntry[]) => void) | null;
+  private readonly onCommitUser: ((cfg: Readonly<Record<string, number>>) => void) | null;
+  private readonly onTrajectoryChangeUser: ((record: TrajectoryRecord) => void) | null;
   private readonly paramSpecs: ReadonlyArray<ParamSpec>;
   private readonly userOnParamChange: (path: string, value: number) => void;
   private readonly calque: OrbitCalque;
   private readonly toggleButton: HTMLButtonElement;
   private readonly trashButton: HTMLButtonElement;
   private readonly presetsBadge: HTMLSpanElement;
+  private readonly presetsSelect: HTMLSelectElement;
+  private readonly presetsCountLabel: HTMLSpanElement;
   private readonly onKeyDown: (e: KeyboardEvent) => void;
   private readonly tracker: PresetPromotionTracker;
   private readonly libraryUndo: LibraryUndoScope;
+  private wrappedInteractionStart!: () => void;
+  private wrappedInteractionEnd!: () => void;
   private tickerId: number | null = null;
 
   /** Library cache, keyed by `configHash`. */
   private library: Map<string, Preset>;
   /** Selection of configHashes in insertion order. */
   private selection: string[];
+  /** Append-only trajectory log per ORBITDATAMODELSPEC §C. */
+  private trajectory: TrajectoryRecord;
 
   constructor(container: HTMLElement, options: OrbitUIOptions) {
     if (!container || !(container instanceof HTMLElement)) {
@@ -87,9 +118,18 @@ export class OrbitUI {
     this.paramSpecs = extractParamSpecs(options.uiDescriptor);
     this.onLibraryChange = options.onLibraryChange ?? null;
     this.onSelectionChangeUser = options.onSelectionChange ?? null;
+    this.onCommitUser = options.onCommit ?? null;
+    this.onTrajectoryChangeUser = options.onTrajectoryChange ?? null;
     this.userOnParamChange = options.onParamChange;
     this.library = new Map();
     this.selection = [];
+    this.trajectory = {
+      uiHash: this.uiHash,
+      events: [],
+      headIndex: -1,
+      cursorIndex: -1,
+      updatedAt: 0,
+    };
     this.tracker = new PresetPromotionTracker();
     this.libraryUndo = new LibraryUndoScope();
 
@@ -102,8 +142,13 @@ export class OrbitUI {
     const wrappedEnd = (): void => {
       this.tracker.setInGesture(false);
       this.tracker.recordCommit();
+      this.recordTrajectoryCommit();
       userEnd?.();
     };
+    // Save references so non-pointer code paths (recall menu, etc.)
+    // can bracket their own commits through the same pipeline.
+    this.wrappedInteractionStart = wrappedStart;
+    this.wrappedInteractionEnd = wrappedEnd;
 
     this.inner = new FaustOrbitUI(container, options.onParamChange, {
       onInteractionStart: wrappedStart,
@@ -128,14 +173,64 @@ export class OrbitUI {
 
     this.toggleButton = this.injectLibraryButton();
     this.trashButton = this.injectTrashButton();
-    this.presetsBadge = this.injectPresetsBadge();
+    const badge = this.injectPresetsBadge();
+    this.presetsBadge = badge.wrap;
+    this.presetsCountLabel = badge.label;
+    this.presetsSelect = badge.select;
     this.updatePresetsBadge();
     this.updateTrashButtonVisibility();
     this.onKeyDown = (e) => this.handleKeyDown(e);
     this.container.addEventListener('keydown', this.onKeyDown);
     this.installNarrowToolbarHandlers();
+    this.installCustomToolbarDropdowns();
 
     this.tickerId = window.setInterval(() => this.tickPromotion(), PROMOTION_TICK_MS);
+  }
+
+  /**
+   * Replace the native popups of every toolbar `<select>` with our
+   * theme-styled dropdown. The selects stay in DOM as state holders
+   * (their `change` events still drive FaustOrbitUI's zoom / random
+   * handlers); we just re-route how the popup is opened.
+   */
+  private installCustomToolbarDropdowns(): void {
+    const mix = this.container.querySelector<HTMLSelectElement>('.orbit-random-mix');
+    const zoom = this.container.querySelector<HTMLSelectElement>('.orbit-zoom');
+    if (mix) enableCustomDropdown(mix);
+    if (zoom) enableCustomDropdown(zoom);
+    enableCustomDropdown(this.presetsSelect, () => this.buildPresetsDropdownItems());
+  }
+
+  /** Build the preset dropdown items (mirrors rebuildPresetSelectOptions
+   *  but as DropdownItem records instead of <option> elements). */
+  private buildPresetsDropdownItems(): ReadonlyArray<DropdownItem> {
+    const items: DropdownItem[] = [];
+    const params = this.inner.getParamValues();
+    const matchesNamed = this.libraryArray().some(
+      (p) => typeof p.name === 'string' && p.name.length > 0
+        && this.matchesCurrentParams(p, params),
+    );
+    items.push({
+      kind: 'option',
+      value: '__save__',
+      label: '+ Save current state as preset',
+      disabled: matchesNamed,
+    });
+    const named = this.libraryArray()
+      .filter((p) => typeof p.name === 'string' && p.name.length > 0)
+      .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }));
+    if (named.length > 0) {
+      items.push({ kind: 'separator' });
+      for (const preset of named) {
+        items.push({
+          kind: 'option',
+          value: preset.configHash,
+          label: preset.name!,
+          active: this.matchesCurrentParams(preset, params),
+        });
+      }
+    }
+    return items;
   }
 
   setParams(config: Readonly<Record<string, number>>): void {
@@ -160,6 +255,31 @@ export class OrbitUI {
     this.updatePresetsBadge();
   }
 
+  /** Replace the trajectory record from outside (initial load or
+   *  cross-instance sync). Records whose `uiHash` does not match the
+   *  current signature are ignored. Does NOT emit `onTrajectoryChange`. */
+  setTrajectory(record: TrajectoryRecord): void {
+    if (!record || typeof record !== 'object') return;
+    if (record.uiHash !== this.uiHash) return;
+    if (!Array.isArray(record.events)) return;
+    const events: TrajectoryEvent[] = [];
+    for (const e of record.events) {
+      if (!isTrajectoryEvent(e)) continue;
+      events.push(normaliseTrajectoryEvent(e));
+    }
+    const trimmed = events.slice(-TRAJECTORY_MAX_EVENTS);
+    const len = trimmed.length;
+    const head = clampIndex(record.headIndex, len);
+    const cursor = clampIndex(record.cursorIndex, len);
+    this.trajectory = {
+      uiHash: this.uiHash,
+      events: trimmed,
+      headIndex: head,
+      cursorIndex: cursor,
+      updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : Date.now(),
+    };
+  }
+
   setSelection(entries: readonly SelectionEntry[]): void {
     if (!Array.isArray(entries)) return;
     const valid = entries
@@ -180,6 +300,7 @@ export class OrbitUI {
 
   getLibrary(): Preset[] { return this.libraryArray(); }
   getSelection(): SelectionEntry[] { return this.selectionEntries(); }
+  getTrajectory(): TrajectoryRecord { return this.snapshotTrajectory(); }
 
   setPromotionSuspended(suspended: boolean): void {
     this.tracker.setSuspended(suspended);
@@ -210,7 +331,6 @@ export class OrbitUI {
       this.tickerId = null;
     }
     this.container.removeEventListener('keydown', this.onKeyDown);
-    this.closeRecallMenu();
     this.toggleButton.remove();
     this.trashButton.remove();
     this.presetsBadge.remove();
@@ -418,109 +538,115 @@ export class OrbitUI {
     this.trashButton.hidden = this.selection.length === 0;
   }
 
-  private injectPresetsBadge(): HTMLSpanElement {
+  /**
+   * Build the count badge as a pill-shaped wrapper that contains a
+   * visible count label AND a transparent native `<select>` overlaying
+   * it. Click anywhere on the badge → showPicker() opens the native
+   * dropdown — same trick used for the narrow-mode random/zoom
+   * dropdowns. Options are rebuilt fresh each time the picker opens
+   * (so the active ✓ and the named-preset list reflect live state).
+   */
+  private injectPresetsBadge(): {
+    wrap: HTMLSpanElement;
+    label: HTMLSpanElement;
+    select: HTMLSelectElement;
+  } {
     const middle = this.container.querySelector<HTMLElement>('.orbit-middle-actions');
-    const span = document.createElement('span');
-    span.className = 'orbit-presets-count';
-    span.title = 'Recall a named preset';
-    span.tabIndex = 0;
-    span.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.toggleRecallMenu();
-    });
-    if (middle) middle.appendChild(span);
-    else this.container.appendChild(span);
-    return span;
+    const wrap = document.createElement('span');
+    wrap.className = 'orbit-presets-count';
+    wrap.title = 'Recall a named preset';
+
+    const label = document.createElement('span');
+    label.className = 'orbit-presets-count-label';
+    wrap.appendChild(label);
+
+    const select = document.createElement('select');
+    select.className = 'orbit-presets-select';
+    select.setAttribute('aria-label', 'Recall a named preset');
+    wrap.appendChild(select);
+
+    // Rebuild options just-in-time so they reflect the live library.
+    const refreshOptions = (): void => {
+      this.rebuildPresetSelectOptions(select);
+    };
+    select.addEventListener('mousedown', refreshOptions);
+    select.addEventListener('focus', refreshOptions);
+    select.addEventListener('change', () => this.handlePresetSelectChange(select));
+
+    // The transparent <select> overlays the badge with `pointer-events:
+    // auto`, so clicks anywhere on the wrap reach it; its mousedown
+    // listener (added later by enableCustomDropdown) opens the themed
+    // popup. No separate wrap click handler needed.
+
+    if (middle) middle.appendChild(wrap);
+    else this.container.appendChild(wrap);
+    return { wrap, label, select };
   }
 
-  // ------------------------------------------------------------------------
-  // Recall menu (niveau-0): click the count badge to open a sorted list
-  // of named presets. Anonymous (auto-promoted) presets stay behind the
-  // calque — the menu is the "pinned subset". Outside click, Esc, or
-  // scroll dismiss it.
-  // ------------------------------------------------------------------------
+  private rebuildPresetSelectOptions(select: HTMLSelectElement): void {
+    while (select.firstChild) select.removeChild(select.firstChild);
 
-  private recallMenu: HTMLDivElement | null = null;
-  private recallMenuTeardown: (() => void) | null = null;
+    // Sentinel option — picked as the fallback "selected" so the
+    // native picker doesn't auto-highlight "+" or the first preset
+    // when no named preset matches the current state.
+    const sentinel = document.createElement('option');
+    sentinel.value = '';
+    sentinel.hidden = true;
+    sentinel.disabled = true;
+    select.appendChild(sentinel);
 
-  private toggleRecallMenu(): void {
-    if (this.recallMenu) this.closeRecallMenu();
-    else this.openRecallMenu();
-  }
+    const params = this.inner.getParamValues();
+    const matchesNamed = this.libraryArray().some(
+      (p) => typeof p.name === 'string' && p.name.length > 0
+        && this.matchesCurrentParams(p, params),
+    );
+    const saveOption = document.createElement('option');
+    saveOption.value = '__save__';
+    saveOption.textContent = '+ Save current state as preset';
+    saveOption.disabled = matchesNamed;
+    select.appendChild(saveOption);
 
-  private openRecallMenu(): void {
-    this.closeRecallMenu();
     const named = this.libraryArray()
       .filter((p) => typeof p.name === 'string' && p.name.length > 0)
       .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }));
-    const menu = document.createElement('div');
-    menu.className = 'orbit-recall-menu';
-    this.positionRecallMenuUnder(menu, this.presetsBadge);
-
-    if (named.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'orbit-recall-menu-empty';
-      empty.textContent = 'No named presets';
-      menu.appendChild(empty);
-    } else {
-      const params = this.inner.getParamValues();
+    let activeFound = false;
+    if (named.length > 0) {
+      const sep = document.createElement('option');
+      sep.disabled = true;
+      sep.textContent = '──────────';
+      select.appendChild(sep);
       for (const preset of named) {
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'orbit-recall-menu-item';
+        const opt = document.createElement('option');
+        opt.value = preset.configHash;
+        opt.textContent = preset.name!;
+        // The browser draws a native ✓ in the gutter for the selected
+        // option — no manual prefix needed. Marking the active preset
+        // as `selected` triggers that gutter check.
         if (this.matchesCurrentParams(preset, params)) {
-          item.classList.add('orbit-recall-menu-item--active');
+          opt.selected = true;
+          activeFound = true;
         }
-        item.textContent = preset.name!;
-        item.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          this.closeRecallMenu();
-          this.recallPreset(preset);
-        });
-        menu.appendChild(item);
+        select.appendChild(opt);
       }
     }
-
-    document.body.appendChild(menu);
-
-    const onDocPointerDown = (e: PointerEvent): void => {
-      const t = e.target as Node | null;
-      if (!t) return;
-      if (menu.contains(t) || this.presetsBadge.contains(t)) return;
-      this.closeRecallMenu();
-    };
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        this.closeRecallMenu();
-      }
-    };
-    const onScrollOrResize = (): void => this.closeRecallMenu();
-    document.addEventListener('pointerdown', onDocPointerDown, { capture: true });
-    document.addEventListener('keydown', onKeyDown, { capture: true });
-    window.addEventListener('scroll', onScrollOrResize, { capture: true });
-    window.addEventListener('resize', onScrollOrResize);
-
-    this.recallMenu = menu;
-    this.recallMenuTeardown = () => {
-      document.removeEventListener('pointerdown', onDocPointerDown, { capture: true });
-      document.removeEventListener('keydown', onKeyDown, { capture: true });
-      window.removeEventListener('scroll', onScrollOrResize, { capture: true });
-      window.removeEventListener('resize', onScrollOrResize);
-    };
+    if (!activeFound) sentinel.selected = true;
   }
 
-  private closeRecallMenu(): void {
-    if (this.recallMenuTeardown) { this.recallMenuTeardown(); this.recallMenuTeardown = null; }
-    if (this.recallMenu) { this.recallMenu.remove(); this.recallMenu = null; }
-  }
-
-  private positionRecallMenuUnder(menu: HTMLElement, anchor: HTMLElement): void {
-    const r = anchor.getBoundingClientRect();
-    menu.style.left = `${Math.round(r.left)}px`;
-    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  private handlePresetSelectChange(select: HTMLSelectElement): void {
+    const value = select.value;
+    // Reset to the sentinel so the next pick of the same option still
+    // fires `change` (a native select doesn't fire change when the
+    // selected value doesn't actually change).
+    select.selectedIndex = 0;
+    if (!value) return;
+    if (value === '__save__') {
+      const name = window.prompt('Preset name (leave empty for anonymous):', '');
+      if (name === null) return;
+      this.handleSaveCurrentAsPreset(name);
+      return;
+    }
+    const preset = this.library.get(value);
+    if (preset) this.recallPreset(preset);
   }
 
   /**
@@ -548,20 +674,134 @@ export class OrbitUI {
    * past the dwell threshold).
    */
   private recallPreset(preset: Preset): void {
+    // Bracket the recall as a gesture so it flows through the commit
+    // pipeline (auto-promotion tracker, trajectory log, host's
+    // onInteractionStart/End / onCommit).
+    this.wrappedInteractionStart();
+    if (this.calque.isVisible()) {
+      // Calque open: same effect as a click on the disc — snap the
+      // centre, make this preset the selection.
+      this.calque.recallByHash(preset.configHash);
+    } else {
+      // Calque closed: just push the configuration into the audio.
+      const cfg: Record<string, number> = {};
+      for (const spec of this.paramSpecs) {
+        cfg[spec.address] = preset.configuration[spec.address] ?? spec.default;
+      }
+      this.inner.setParams(cfg);
+      for (const [path, value] of Object.entries(cfg)) {
+        this.userOnParamChange(path, value);
+      }
+    }
+    this.wrappedInteractionEnd();
+  }
+
+  /**
+   * "+" entry of the recall menu: capture the current audible params as
+   * a new preset. `name` is optional — empty / undefined creates an
+   * anonymous preset (subject to FIFO eviction); a non-empty trimmed
+   * value creates a named (permanent) preset. If any existing preset
+   * already represents the same configuration (canonical value-by-value
+   * match), we don't duplicate — instead we either rename it (if a new
+   * name was supplied) or just bump its lastSeenAt.
+   */
+  private handleSaveCurrentAsPreset(name?: string): void {
+    const trimmed = (name ?? '').trim();
+    const params = this.inner.getParamValues();
+
+    for (const existing of this.library.values()) {
+      if (!this.matchesCurrentParams(existing, params)) continue;
+      if (trimmed.length > 0 && existing.name !== trimmed) {
+        // Apply the new name through the rename pipeline (records a
+        // rename op on the library undo stack).
+        this.handlePresetRename(existing.configHash, trimmed);
+      } else {
+        // No-op rename: just refresh recency.
+        this.library.set(existing.configHash, { ...existing, lastSeenAt: Date.now() });
+        this.emitLibraryChange();
+      }
+      return;
+    }
+
+    // Build a canonicalized configuration covering every paramSpec so
+    // future configHash lookups are stable.
     const cfg: Record<string, number> = {};
     for (const spec of this.paramSpecs) {
-      cfg[spec.address] = preset.configuration[spec.address] ?? spec.default;
+      cfg[spec.address] = params[spec.address] ?? spec.default;
     }
-    this.inner.setParams(cfg);
-    for (const [path, value] of Object.entries(cfg)) {
-      this.userOnParamChange(path, value);
+    const configHash = computeConfigHashSync(cfg);
+    const preset: Preset = {
+      uiHash: this.uiHash,
+      configHash,
+      lastSeenAt: Date.now(),
+      configuration: cfg,
+      ...(trimmed.length > 0 ? { name: trimmed } : {}),
+    };
+    this.library.set(configHash, preset);
+    this.libraryUndo.record({ kind: 'add', record: preset });
+    this.emitLibraryChange();
+  }
+
+  /**
+   * Capture the audible state as a TrajectoryEvent and append it to the
+   * log. Called from `wrappedEnd` so every gesture-bracketed change
+   * (knob drag, calque drag, click-to-recall, arrow-nav step, recall
+   * menu) flows through here. Loop steps are NOT recorded — they're a
+   * playback mode, not a user commit.
+   */
+  private recordTrajectoryCommit(): void {
+    const cfg = this.canonicalCurrentConfig();
+    const event: TrajectoryEvent = {
+      timestampMs: Date.now(),
+      configuration: cfg,
+    };
+    let events = this.trajectory.events.concat(event);
+    if (events.length > TRAJECTORY_MAX_EVENTS) {
+      events = events.slice(events.length - TRAJECTORY_MAX_EVENTS);
     }
+    const headIndex = events.length - 1;
+    this.trajectory = {
+      uiHash: this.uiHash,
+      events,
+      headIndex,
+      cursorIndex: headIndex,
+      updatedAt: Date.now(),
+    };
+    this.onCommitUser?.(cfg);
+    this.onTrajectoryChangeUser?.(this.snapshotTrajectory());
+  }
+
+  private canonicalCurrentConfig(): Record<string, number> {
+    const params = this.inner.getParamValues();
+    const cfg: Record<string, number> = {};
+    for (const spec of this.paramSpecs) {
+      cfg[spec.address] = params[spec.address] ?? spec.default;
+    }
+    return cfg;
+  }
+
+  private snapshotTrajectory(): TrajectoryRecord {
+    return {
+      uiHash: this.trajectory.uiHash,
+      events: this.trajectory.events.map((e) => ({
+        timestampMs: e.timestampMs,
+        configuration: { ...e.configuration },
+        ...(e.transitionTimeMs !== undefined ? { transitionTimeMs: e.transitionTimeMs } : {}),
+        ...(e.transitionLevel !== undefined ? { transitionLevel: e.transitionLevel } : {}),
+        ...(e.loopContext !== undefined ? { loopContext: e.loopContext } : {}),
+      })),
+      headIndex: this.trajectory.headIndex,
+      cursorIndex: this.trajectory.cursorIndex,
+      updatedAt: this.trajectory.updatedAt,
+    };
   }
 
   private updatePresetsBadge(): void {
     const total = this.library.size;
     const sel = this.selection.length;
-    this.presetsBadge.textContent = sel > 0 ? `${sel}/${total}` : String(total);
+    // Write the count to the inner label only — touching the wrap's
+    // textContent would wipe the overlaid <select>.
+    this.presetsCountLabel.textContent = sel > 0 ? `${sel}/${total}` : String(total);
     this.updateTrashButtonVisibility();
   }
 
@@ -628,15 +868,24 @@ export class OrbitUI {
         timer = window.setTimeout(() => {
           firedLong = true;
           timer = null;
-          // Open the native picker if available; older browsers fall back
-          // to focusing the select (which still lets the user open it
-          // with a subsequent click / Space).
-          if (typeof (select as unknown as { showPicker?: () => void }).showPicker === 'function') {
-            try { (select as unknown as { showPicker: () => void }).showPicker(); }
-            catch { select.focus(); }
-          } else {
-            select.focus();
-          }
+          // Open the same theme-styled dropdown the wide mode uses,
+          // anchored under the icon button.
+          openDropdownMenu({
+            anchor: target,
+            items: Array.from(select.options)
+              .filter((o) => !o.hidden)
+              .map((o) => ({
+                kind: 'option' as const,
+                value: o.value,
+                label: o.textContent ?? '',
+                disabled: o.disabled,
+                active: o.selected,
+              })),
+            onPick: (value) => {
+              select.value = value;
+              select.dispatchEvent(new Event('change', { bubbles: true }));
+            },
+          });
         }, LONG_PRESS_MS);
       });
       const cancel = (): void => {
@@ -733,6 +982,36 @@ function isPreset(value: unknown): value is Preset {
     if (typeof cv !== 'number') return false;
   }
   return true;
+}
+
+function isTrajectoryEvent(value: unknown): value is TrajectoryEvent {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.timestampMs !== 'number') return false;
+  if (!v.configuration || typeof v.configuration !== 'object') return false;
+  for (const cv of Object.values(v.configuration as Record<string, unknown>)) {
+    if (typeof cv !== 'number') return false;
+  }
+  if (v.transitionTimeMs !== undefined && typeof v.transitionTimeMs !== 'number') return false;
+  if (v.transitionLevel !== undefined && v.transitionLevel !== 0 && v.transitionLevel !== 1) return false;
+  if (v.loopContext !== undefined && typeof v.loopContext !== 'string') return false;
+  return true;
+}
+
+function normaliseTrajectoryEvent(e: TrajectoryEvent): TrajectoryEvent {
+  return {
+    timestampMs: e.timestampMs,
+    configuration: { ...e.configuration },
+    ...(e.transitionTimeMs !== undefined ? { transitionTimeMs: e.transitionTimeMs } : {}),
+    ...(e.transitionLevel !== undefined ? { transitionLevel: e.transitionLevel } : {}),
+    ...(e.loopContext !== undefined ? { loopContext: e.loopContext } : {}),
+  };
+}
+
+function clampIndex(idx: unknown, len: number): number {
+  if (typeof idx !== 'number' || !Number.isFinite(idx)) return -1;
+  if (len === 0) return -1;
+  return Math.max(-1, Math.min(len - 1, Math.floor(idx)));
 }
 
 function isSelectionEntry(value: unknown): value is SelectionEntry {

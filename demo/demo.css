@@ -125,3 +125,5 @@ body {
 .event .tag-library  { background: #2b4d6e; color: #eaf2fb; }
 .event .tag-selection { background: #4a3b6c; color: #ece4fb; }
 .event .tag-param    { background: #3a4f3a; color: #d6f0d6; }
+.event .tag-commit     { background: #6c4a3b; color: #fbe4ec; }
+.event .tag-trajectory { background: #3a4a5f; color: #cfe1f7; }

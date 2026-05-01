@@ -3,6 +3,13 @@
   grid-template-rows: auto 1fr auto;
   height: 100%;
   background: #0d1016;
+  /* Positioning context for the calque's portamento bar (which is
+     appended here so FaustOrbitUI's innerHTML reset on .orbit-detail
+     doesn't wipe it) AND container-query host so the bar's responsive
+     layout can match `@container orbit-detail (max-width: …)`. */
+  position: relative;
+  container-type: inline-size;
+  container-name: orbit-detail;
 }
 
 .orbit-header {
@@ -134,7 +141,6 @@
 /* ── Detail panel (bottom bar for last-touched control) ── */
 
 .orbit-detail {
-  position: relative;
   display: grid;
   grid-template-columns: auto 1fr;
   align-items: center;
@@ -145,10 +151,15 @@
   background: #141b25;
   overflow: hidden;
   /* Container query host — the calque's portamento bar adapts its
-     layout to the detail bar's actual width (regardless of viewport). */
+     layout to the detail bar's actual width (regardless of viewport).
+     The bar itself is now a sibling of .orbit-detail (under .orbit-wrap),
+     so the container-name has to live on .orbit-wrap as well. We keep
+     it here too in case future rules want to query the detail row's
+     own width. */
   container-type: inline-size;
   container-name: orbit-detail;
 }
+
 
 .orbit-detail-empty {
   grid-column: 1 / -1;
