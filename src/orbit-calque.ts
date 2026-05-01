@@ -15,7 +15,7 @@ import {
   type ParamSpec,
   type Projection,
 } from './orbit-projection.js';
-import { TransitionTimer, lerpCenter } from './orbit-transition.js';
+import { lerpCenter } from './orbit-transition.js';
 import type { Preset } from './orbit-types.js';
 
 const DISK_RADIUS_PX = 8;
@@ -44,6 +44,21 @@ const PRESET_FILL_NAMED = 'rgb(232, 201, 122)';
 
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 type DragMode = 'none' | 'centre' | 'marquee';
+
+/** Loop state machine per LOOPSPEC.md §A. */
+type LoopState =
+  | { kind: 'inactive' }
+  | {
+      kind: 'motion';
+      from: readonly [number, number];
+      to: string;             // target preset's configHash
+      startedAt: number;      // performance.now() at phase start
+    }
+  | {
+      kind: 'hold';
+      on: string;             // resting preset's configHash
+      startedAt: number;
+    };
 
 export type OrbitCalqueOptions = {
   /** Container that already hosts the FaustOrbitUI DOM (the orbit-ui-root). */
@@ -128,20 +143,23 @@ export class OrbitCalque {
    *  click-time but the disc is pinned to where the user clicked. Cleared
    *  on hide() and on every full projection recompute. */
   private anchorOverrides: Map<string, readonly [number, number]> = new Map();
-  /** Cursor portamento — animates centerProj from start to target over
-   *  `portamentoMs` and applies Shepard at each step. */
-  private readonly transitionTimer: TransitionTimer = new TransitionTimer();
-  private transitionStart: readonly [number, number] | null = null;
-  private transitionTarget: readonly [number, number] | null = null;
-  private transitionRafId: number | null = null;
+  /** Cursor arrow nav glide — single-shot animation from `from` to `to`
+   *  over `durationMs`. No hold phase, no looping. Distinct from the
+   *  loop's Motion phase (which is part of the LoopState machine). */
+  private cursorGlide: {
+    from: readonly [number, number];
+    to: readonly [number, number];
+    startedAt: number;
+    durationMs: number;
+  } | null = null;
+  private rafTickId: number | null = null;
   private portamentoMs: number = PORTAMENTO_DEFAULT_MS;
-  /** Loop state: cycle duration (ms = full bar at the slider's BPM),
-   *  active flag, current step into the selection, and the timestamp at
-   *  which the current "hold" phase started (between two glides). */
+  /** Cycle duration `T_L` in ms — read live each frame. */
   private loopMs: number = bpmToCycleMs(LOOP_DEFAULT_BPM);
-  private loopActive: boolean = false;
-  private loopIndex: number = 0;
-  private loopHoldStartedAt: number | null = null;
+  /** Loop state machine per LOOPSPEC.md §A. Live-read inputs (S, T_L, v)
+   *  are not snapshotted into the state; only the current target preset
+   *  identity, phase, and phase-start timestamp are stored. */
+  private loop: LoopState = { kind: 'inactive' };
   private bounds: Bounds | null = null;
   private centerProj: readonly [number, number] | null = null;
   private dragMode: DragMode = 'none';
@@ -250,7 +268,7 @@ export class OrbitCalque {
     this.loopButton.title = 'Loop the selection';
     this.loopButton.disabled = true;
     this.loopButton.addEventListener('click', () => {
-      if (this.loopActive) this.stopLoop();
+      if (this.loop.kind !== 'inactive') this.stopLoop();
       else this.startLoop();
     });
     this.portamentoBar.appendChild(this.loopButton);
@@ -341,6 +359,7 @@ export class OrbitCalque {
       this.recomputeVisualPositions();
       this.scheduleRender();
     }
+    if (pruned) this.applyLoopSwap();
   }
 
   /** Push the selection from outside (host sync, OrbitUI replay). Does
@@ -349,6 +368,7 @@ export class OrbitCalque {
     this.selection = new Set(configHashes);
     this.updateLoopButtonEnabled();
     if (this.visible) this.scheduleRender();
+    this.applyLoopSwap();
   }
 
   isVisible(): boolean { return this.visible; }
@@ -416,6 +436,7 @@ export class OrbitCalque {
     this.cancelTransition();
     this.resizeObs.disconnect();
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
+    if (this.rafTickId !== null) cancelAnimationFrame(this.rafTickId);
     this.portamentoBar.remove();
     this.overlay.remove();
   }
@@ -780,12 +801,12 @@ export class OrbitCalque {
     if (!this.visible || !this.projection) return;
     e.preventDefault();
     this.canvas.setPointerCapture(e.pointerId);
-    // A press pre-empts any in-flight glide so direct manipulation wins.
-    this.cancelTransition();
 
     if (e.shiftKey) {
-      // Shift+click on a preset → toggle in selection (additive).
-      // Shift+drag on empty → marquee, additive.
+      // Shift gestures = pure selection edits — they DO NOT pre-empt
+      // the loop or any in-flight glide (LOOPSPEC §F). Shift+click on
+      // a preset toggles in selection (additive). Shift+drag on empty
+      // starts a marquee that REPLACES the selection on release.
       const presetIdx = this.hitTestPreset(e.clientX, e.clientY);
       if (presetIdx >= 0) {
         const preset = this.library[presetIdx]!;
@@ -798,6 +819,10 @@ export class OrbitCalque {
       this.scheduleRender();
       return;
     }
+
+    // Plain (non-shift) gestures take direct control of the centre
+    // cross — they pre-empt any in-flight glide AND stop the loop.
+    this.cancelTransition();
 
     // Centre cross takes priority when it sits on top of a preset, so
     // the user can still reposition it without triggering a recall.
@@ -953,6 +978,11 @@ export class OrbitCalque {
     }
   };
 
+  /**
+   * Marquee replaces the selection with whatever the rectangle encloses
+   * (LOOPSPEC §F). An empty rectangle clears the selection. Compatible
+   * with the swap rule — the loop adapts via applyLoopSwap.
+   */
   private finalizeMarquee(): void {
     const m = this.marquee;
     if (!m || !this.bounds) return;
@@ -962,20 +992,16 @@ export class OrbitCalque {
     const y1 = Math.max(m.startY, m.endY);
     const rect = this.canvas.getBoundingClientRect();
     const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom, this.viewportCenterProj);
-    let mutated = false;
+    const next: string[] = [];
     for (let i = 0; i < this.library.length; i += 1) {
       const pos = this.visualPositions[i]!;
       const cx = map.x(pos[0]);
       const cy = map.y(pos[1]);
       if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) {
-        const hash = this.library[i]!.configHash;
-        if (!this.selection.has(hash)) {
-          this.selection.add(hash);
-          mutated = true;
-        }
+        next.push(this.library[i]!.configHash);
       }
     }
-    if (mutated) this.emitSelection();
+    this.replaceSelection(next);
   }
 
   private replaceSelection(hashes: ReadonlyArray<string>): void {
@@ -1002,6 +1028,8 @@ export class OrbitCalque {
 
   private emitSelection(): void {
     this.updateLoopButtonEnabled();
+    // Loop reacts to selection changes via the swap rule (LOOPSPEC §D).
+    this.applyLoopSwap();
     this.onSelectionChangeCb?.(Array.from(this.selection));
   }
 
@@ -1091,140 +1119,235 @@ export class OrbitCalque {
     return bestI;
   }
 
+  // ------------------------------------------------------------------------
+  // Cursor arrow nav (single-shot glide, no loop) — separate from
+  // LoopState. Cancels any in-flight loop per LOOPSPEC §F.
+  // ------------------------------------------------------------------------
+
   private startCenterTransition(target: readonly [number, number]): void {
-    if (!this.centerProj) {
+    this.stopLoop();
+    if (!this.centerProj || this.portamentoMs <= 0) {
       this.centerProj = target;
       this.applyCentre();
       this.scheduleRender();
       return;
     }
-    if (this.portamentoMs <= 0) {
-      this.centerProj = target;
-      this.applyCentre();
-      this.scheduleRender();
-      return;
-    }
-    this.transitionStart = [this.centerProj[0], this.centerProj[1]];
-    this.transitionTarget = [target[0], target[1]];
-    this.transitionTimer.start(this.portamentoMs, performance.now());
-    this.onInteractionStart?.();
-    this.runTransitionRaf();
-  }
-
-  private runTransitionRaf(): void {
-    if (this.transitionRafId !== null) return;
-    const tick = (): void => {
-      this.transitionRafId = null;
-      const more = this.advanceTransition(performance.now());
-      if (more) this.transitionRafId = requestAnimationFrame(tick);
-      else if (!this.loopActive) this.onInteractionEnd?.();
+    this.cursorGlide = {
+      from: [this.centerProj[0], this.centerProj[1]],
+      to: [target[0], target[1]],
+      startedAt: performance.now(),
+      durationMs: this.portamentoMs,
     };
-    this.transitionRafId = requestAnimationFrame(tick);
+    this.onInteractionStart?.();
+    this.scheduleRafTick();
   }
 
-  private advanceTransition(now: number): boolean {
-    if (!this.transitionStart || !this.transitionTarget) {
-      return this.loopActive ? this.tickLoopHold(now) : false;
-    }
-    const alpha = this.transitionTimer.alpha(now);
-    if (alpha === null) {
-      return this.loopActive ? this.tickLoopHold(now) : false;
-    }
-    this.centerProj = lerpCenter(this.transitionStart, this.transitionTarget, alpha);
-    this.applyCentre();
-    this.scheduleRender();
-    if (alpha < 1) return true;
-    return this.loopActive ? this.tickLoopHold(now) : false;
-  }
-
+  /** Cancel any in-flight cursor glide AND stop the loop. Used when
+   *  direct-manipulation gestures take over (centre drag, plain click,
+   *  trash-clears-selection, hide, …). */
   private cancelTransition(): void {
     this.stopLoop();
-    if (this.transitionRafId !== null) {
-      cancelAnimationFrame(this.transitionRafId);
-      this.transitionRafId = null;
-    }
-    this.transitionTimer.stop();
-    this.transitionStart = null;
-    this.transitionTarget = null;
+    this.cancelCursorGlide();
+  }
+
+  /** Cancel only the cursor glide, leaving the loop alone. */
+  private cancelCursorGlide(): void {
+    if (!this.cursorGlide) return;
+    this.cursorGlide = null;
+    this.onInteractionEnd?.();
   }
 
   // ------------------------------------------------------------------------
-  // Loop mode (cyclic playback through the selection)
+  // Loop mode (LOOPSPEC.md)
   // ------------------------------------------------------------------------
 
   private startLoop(): void {
-    if (this.loopActive) return;
+    if (this.loop.kind !== 'inactive') return;
     if (this.selection.size === 0) return;
-    this.loopActive = true;
-    this.loopHoldStartedAt = null;
-    this.loopIndex = 0;
-    this.loopButton.textContent = '■'; // ■
+    if (!this.projection) return;
+    const arr = Array.from(this.selection);
+    const firstHash = arr[0]!;
+    const targetPos = this.visualPositionOf(firstHash);
+    if (!targetPos) return;
+    const from: readonly [number, number] = this.centerProj
+      ? [this.centerProj[0], this.centerProj[1]]
+      : [targetPos[0], targetPos[1]];
+    if (!this.centerProj) this.centerProj = from;
+    this.loop = {
+      kind: 'motion',
+      from,
+      to: firstHash,
+      startedAt: performance.now(),
+    };
+    this.loopButton.textContent = '■';
     this.loopButton.title = 'Stop loop';
-    this.armNextLoopStep();
-    this.runTransitionRaf();
+    this.scheduleRafTick();
   }
 
   private stopLoop(): void {
-    if (!this.loopActive) return;
-    this.loopActive = false;
-    this.loopHoldStartedAt = null;
-    this.loopButton.textContent = '▶'; // ▶
+    if (this.loop.kind === 'inactive') return;
+    this.loop = { kind: 'inactive' };
+    this.loopButton.textContent = '▶';
     this.loopButton.title = 'Loop the selection';
   }
 
-  private armNextLoopStep(): void {
-    if (!this.projection) return;
-    const hashes = Array.from(this.selection);
-    if (hashes.length === 0) {
-      this.stopLoop();
-      return;
-    }
-    const targetHash = hashes[this.loopIndex % hashes.length];
-    if (!targetHash) return;
-    const idx = this.library.findIndex((p) => p.configHash === targetHash);
-    if (idx < 0) {
-      // Preset was deleted between two steps. Restart at index 0 next tick.
-      this.loopIndex = 0;
-      return;
-    }
-    const target = this.visualPositions[idx];
-    if (!target) return;
-    if (!this.centerProj) this.centerProj = target;
-    this.transitionStart = [this.centerProj[0], this.centerProj[1]];
-    this.transitionTarget = [target[0], target[1]];
-    this.transitionTimer.start(this.portamentoMs, performance.now());
+  /**
+   * `chooseNext(current)` per LOOPSPEC §E: successor in the live
+   * selection (cyclic), or S[0] when current is no longer in S.
+   */
+  private chooseNext(current: string): string | null {
+    const arr = Array.from(this.selection);
+    if (arr.length === 0) return null;
+    const i = arr.indexOf(current);
+    if (i < 0) return arr[0]!;
+    return arr[(i + 1) % arr.length]!;
   }
 
   /**
-   * Hold phase between two preset glides. `loopMs` is the full cycle
-   * duration; per-step duration is `cycle / m` where m is the live
-   * selection size — adding/removing presets during the loop changes
-   * the density, not the tempo. Hold = perStep − Tp.
+   * `swap(S')` rule per LOOPSPEC §D. Called whenever the selection has
+   * just changed (post-mutation) and the loop is active. If the current
+   * target preset is still in S, the state is left untouched (Case 1 —
+   * no discontinuity). If it's gone, redirect a Motion phase from the
+   * current cursor position toward the closest preset in S' (Case 2 —
+   * the trajectory bends but the centre's position stays continuous).
    */
-  private tickLoopHold(now: number): boolean {
-    const hashes = Array.from(this.selection);
-    if (hashes.length === 0) {
+  private applyLoopSwap(): void {
+    if (this.loop.kind === 'inactive') return;
+    if (this.selection.size === 0) {
       this.stopLoop();
-      return false;
+      return;
     }
-    if (this.loopHoldStartedAt === null) {
-      this.loopHoldStartedAt = now;
-      return true;
+    const target = this.loop.kind === 'motion' ? this.loop.to : this.loop.on;
+    if (this.selection.has(target)) return; // Case 1
+    // Case 2 — pick the closest preset in S' to the live cursor.
+    if (!this.centerProj) {
+      this.stopLoop();
+      return;
     }
-    const tp = Math.max(0, this.portamentoMs);
-    const perStep = Math.max(this.loopMs / hashes.length, tp);
-    const holdMs = Math.max(0, perStep - tp);
-    if (now - this.loopHoldStartedAt < holdMs) return true;
-    this.loopHoldStartedAt = null;
-    this.loopIndex = (this.loopIndex + 1) % hashes.length;
-    this.armNextLoopStep();
-    return true;
+    const closest = this.findClosestSelected(this.centerProj);
+    if (!closest) {
+      this.stopLoop();
+      return;
+    }
+    this.loop = {
+      kind: 'motion',
+      from: [this.centerProj[0], this.centerProj[1]],
+      to: closest,
+      startedAt: performance.now(),
+    };
+    this.scheduleRafTick();
+  }
+
+  private findClosestSelected(c: readonly [number, number]): string | null {
+    let bestHash: string | null = null;
+    let bestD = Infinity;
+    for (const hash of this.selection) {
+      const pos = this.visualPositionOf(hash);
+      if (!pos) continue;
+      const d = Math.hypot(c[0] - pos[0], c[1] - pos[1]);
+      if (d < bestD) { bestD = d; bestHash = hash; }
+    }
+    return bestHash;
+  }
+
+  private visualPositionOf(configHash: string): readonly [number, number] | null {
+    const idx = this.library.findIndex((p) => p.configHash === configHash);
+    if (idx < 0) return null;
+    return this.visualPositions[idx] ?? null;
   }
 
   private updateLoopButtonEnabled(): void {
-    const enabled = this.selection.size > 0;
-    this.loopButton.disabled = !enabled;
-    if (!enabled && this.loopActive) this.stopLoop();
+    this.loopButton.disabled = this.selection.size === 0;
+    // The loop itself self-terminates on n=0 via applyLoopSwap; no
+    // extra handling needed here.
+  }
+
+  // ------------------------------------------------------------------------
+  // Single rAF tick — drives both the cursor glide and the loop.
+  // Schedules itself while either is active.
+  // ------------------------------------------------------------------------
+
+  private scheduleRafTick(): void {
+    if (this.rafTickId !== null) return;
+    const run = (): void => {
+      this.rafTickId = null;
+      const more = this.tickFrame(performance.now());
+      if (more) this.rafTickId = requestAnimationFrame(run);
+    };
+    this.rafTickId = requestAnimationFrame(run);
+  }
+
+  /** One animation frame. Returns true while there's still work to do. */
+  private tickFrame(now: number): boolean {
+    let stillRunning = false;
+
+    // Cursor glide takes precedence (loop is stopped while cursor
+    // glide is in flight per LOOPSPEC §F).
+    if (this.cursorGlide) {
+      const { from, to, startedAt, durationMs } = this.cursorGlide;
+      const g = durationMs <= 0 ? 1 : Math.max(0, Math.min(1, (now - startedAt) / durationMs));
+      this.centerProj = lerpCenter(from, to, g);
+      this.applyCentre();
+      this.scheduleRender();
+      if (g >= 1) {
+        this.cancelCursorGlide();
+      } else {
+        stillRunning = true;
+      }
+      return stillRunning;
+    }
+
+    // Loop phases.
+    if (this.loop.kind === 'motion') {
+      const tp = Math.max(0, this.portamentoMs);
+      const targetPos = this.visualPositionOf(this.loop.to);
+      if (!targetPos) {
+        // Target preset no longer in library — defer to the swap rule.
+        this.applyLoopSwap();
+        return (this.loop as LoopState).kind !== 'inactive';
+      }
+      const g = tp <= 0 ? 1 : Math.max(0, Math.min(1, (now - this.loop.startedAt) / tp));
+      this.centerProj = lerpCenter(this.loop.from, targetPos, g);
+      this.applyCentre();
+      this.scheduleRender();
+      if (g >= 1) {
+        // Motion → Hold.
+        this.loop = { kind: 'hold', on: this.loop.to, startedAt: now };
+      }
+      stillRunning = true;
+    } else if (this.loop.kind === 'hold') {
+      const n = this.selection.size;
+      if (n === 0) {
+        this.stopLoop();
+        return false;
+      }
+      const r = Math.max(this.loopMs / n - this.portamentoMs, 0);
+      const elapsed = now - this.loop.startedAt;
+      if (elapsed >= r) {
+        // Hold → Motion (chooseNext on live selection).
+        const nextHash = this.chooseNext(this.loop.on);
+        if (!nextHash) {
+          this.stopLoop();
+          return false;
+        }
+        const fromPos = this.visualPositionOf(this.loop.on);
+        if (!fromPos) {
+          this.applyLoopSwap();
+          return (this.loop as LoopState).kind !== 'inactive';
+        }
+        this.loop = {
+          kind: 'motion',
+          from: fromPos,
+          to: nextHash,
+          startedAt: now,
+        };
+        // Re-render so the new from→to motion picks up immediately.
+        this.scheduleRender();
+      }
+      stillRunning = true;
+    }
+
+    return stillRunning;
   }
 
   /**
