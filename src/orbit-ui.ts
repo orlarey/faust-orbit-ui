@@ -150,7 +150,16 @@ export class OrbitUI {
     this.wrappedInteractionStart = wrappedStart;
     this.wrappedInteractionEnd = wrappedEnd;
 
-    this.inner = new FaustOrbitUI(container, options.onParamChange, {
+    // Wrap the host's onParamChange so we can refresh the toolbar's
+    // preset display (active name vs count) on every drag tick. The
+    // matchesCurrentParams probe is cheap (k presets × n addresses).
+    const wrappedParamChange = (path: string, value: number): void => {
+      options.onParamChange(path, value);
+      // The badge may not exist yet during initial construction —
+      // guard the call.
+      if (this.presetsCountLabel) this.updatePresetsBadge();
+    };
+    this.inner = new FaustOrbitUI(container, wrappedParamChange, {
       onInteractionStart: wrappedStart,
       onInteractionEnd: wrappedEnd,
     });
@@ -183,8 +192,36 @@ export class OrbitUI {
     this.container.addEventListener('keydown', this.onKeyDown);
     this.installNarrowToolbarHandlers();
     this.installCustomToolbarDropdowns();
+    this.reorderToolbar();
 
     this.tickerId = window.setInterval(() => this.tickPromotion(), PROMOTION_TICK_MS);
+  }
+
+  /**
+   * Reorganise the toolbar so it reads, left-to-right:
+   *   [Presets pill] [Random group] [Trash]
+   *                 ┊  [Library/calque button — pinned to centre]  ┊
+   *                                                  [Center button] [Zoom group]
+   *
+   * The Library button is appended directly to .orbit-header and
+   * absolute-positioned so it stays at the geometric centre of the
+   * toolbar regardless of the side groups' widths.
+   */
+  private reorderToolbar(): void {
+    const header = this.container.querySelector<HTMLElement>('.orbit-header');
+    const middle = this.container.querySelector<HTMLElement>('.orbit-middle-actions');
+    const zoomWrap = this.container.querySelector<HTMLElement>('.orbit-zoom-wrap');
+    const centerBtn = this.container.querySelector<HTMLElement>('.orbit-center-btn');
+    const randomGroup = this.container.querySelector<HTMLElement>('.orbit-random-group');
+    if (!header || !middle || !zoomWrap) return;
+    // Left group: random, presets.
+    if (randomGroup) middle.appendChild(randomGroup);
+    middle.appendChild(this.presetsBadge);
+    // Right group: trash, center, zoom (in this left-to-right order).
+    if (centerBtn) zoomWrap.insertBefore(centerBtn, zoomWrap.firstChild);
+    zoomWrap.insertBefore(this.trashButton, zoomWrap.firstChild);
+    // Library button: pinned to header's geometric centre via CSS.
+    header.appendChild(this.toggleButton);
   }
 
   /**
@@ -236,6 +273,7 @@ export class OrbitUI {
   setParams(config: Readonly<Record<string, number>>): void {
     if (!config || typeof config !== 'object') return;
     this.inner.setParams(config);
+    this.updatePresetsBadge();
   }
 
   setLibrary(records: readonly Preset[]): void {
@@ -366,6 +404,10 @@ export class OrbitUI {
     for (const [path, value] of Object.entries(cfg)) {
       this.userOnParamChange(path, value);
     }
+    // Inner.setParams bypasses paramChangeByUI, so the wrapped
+    // updatePresetsBadge doesn't fire automatically on this path —
+    // refresh manually so the active preset name surfaces immediately.
+    this.updatePresetsBadge();
   }
 
   private handleCalqueSelectionChange(configHashes: ReadonlyArray<string>): void {
@@ -539,33 +581,41 @@ export class OrbitUI {
   }
 
   /**
-   * Build the count badge as a pill-shaped wrapper that contains a
-   * visible count label AND a transparent native `<select>` overlaying
-   * it. Click anywhere on the badge → showPicker() opens the native
-   * dropdown — same trick used for the narrow-mode random/zoom
-   * dropdowns. Options are rebuilt fresh each time the picker opens
-   * (so the active ✓ and the named-preset list reflect live state).
+   * Build the count badge as a pill-shaped group mirroring the Zoom /
+   * Random groups: `[label-icon] | [display]` with a vertical divider.
+   * The display shows the active preset's name when current params
+   * match a named preset, otherwise the selection / count summary.
+   * A transparent `<select>` overlays the entire group as the state
+   * holder; mousedown on it routes to our themed dropdown via
+   * enableCustomDropdown.
    */
   private injectPresetsBadge(): {
-    wrap: HTMLSpanElement;
-    label: HTMLSpanElement;
+    wrap: HTMLElement;
+    label: HTMLElement;
     select: HTMLSelectElement;
   } {
     const middle = this.container.querySelector<HTMLElement>('.orbit-middle-actions');
-    const wrap = document.createElement('span');
-    wrap.className = 'orbit-presets-count';
-    wrap.title = 'Recall a named preset';
+    const group = document.createElement('div');
+    group.className = 'orbit-presets-group';
 
-    const label = document.createElement('span');
-    label.className = 'orbit-presets-count-label';
-    wrap.appendChild(label);
+    const icon = document.createElement('span');
+    icon.className = 'orbit-presets-icon material-symbols-outlined';
+    icon.textContent = 'label';
+    icon.setAttribute('aria-label', 'Presets');
+    icon.title = 'Presets';
+    group.appendChild(icon);
+
+    const display = document.createElement('span');
+    display.className = 'orbit-presets-display';
+    group.appendChild(display);
 
     const select = document.createElement('select');
     select.className = 'orbit-presets-select';
     select.setAttribute('aria-label', 'Recall a named preset');
-    wrap.appendChild(select);
+    group.appendChild(select);
 
-    // Rebuild options just-in-time so they reflect the live library.
+    // Rebuild the underlying <option>s just-in-time so the change
+    // handler can read select.value after a pick.
     const refreshOptions = (): void => {
       this.rebuildPresetSelectOptions(select);
     };
@@ -573,14 +623,9 @@ export class OrbitUI {
     select.addEventListener('focus', refreshOptions);
     select.addEventListener('change', () => this.handlePresetSelectChange(select));
 
-    // The transparent <select> overlays the badge with `pointer-events:
-    // auto`, so clicks anywhere on the wrap reach it; its mousedown
-    // listener (added later by enableCustomDropdown) opens the themed
-    // popup. No separate wrap click handler needed.
-
-    if (middle) middle.appendChild(wrap);
-    else this.container.appendChild(wrap);
-    return { wrap, label, select };
+    if (middle) middle.appendChild(group);
+    else this.container.appendChild(group);
+    return { wrap: group, label: display, select };
   }
 
   private rebuildPresetSelectOptions(select: HTMLSelectElement): void {
@@ -694,6 +739,10 @@ export class OrbitUI {
       }
     }
     this.wrappedInteractionEnd();
+    // Refresh the toolbar's preset display now (inner.setParams bypasses
+    // paramChangeByUI, so the name wouldn't surface until the next
+    // auto-promotion tick otherwise).
+    this.updatePresetsBadge();
   }
 
   /**
@@ -797,11 +846,20 @@ export class OrbitUI {
   }
 
   private updatePresetsBadge(): void {
-    const total = this.library.size;
-    const sel = this.selection.length;
-    // Write the count to the inner label only — touching the wrap's
-    // textContent would wipe the overlaid <select>.
-    this.presetsCountLabel.textContent = sel > 0 ? `${sel}/${total}` : String(total);
+    // Show the active named preset's name if the current params match
+    // it; otherwise the count (or selection over total).
+    const params = this.inner.getParamValues();
+    const named = this.libraryArray().find(
+      (p) => typeof p.name === 'string' && p.name.length > 0
+        && this.matchesCurrentParams(p, params),
+    );
+    if (named) {
+      this.presetsCountLabel.textContent = named.name!;
+    } else {
+      const total = this.library.size;
+      const sel = this.selection.length;
+      this.presetsCountLabel.textContent = sel > 0 ? `${sel}/${total}` : String(total);
+    }
     this.updateTrashButtonVisibility();
   }
 

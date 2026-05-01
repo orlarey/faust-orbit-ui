@@ -1,6 +1,12 @@
 /* Library toggle button injected into the orbit-ui header. Icon-only,
-   styled to blend with .orbit-center-btn / .orbit-random-btn. */
+   styled to blend with .orbit-center-btn / .orbit-random-btn. Pinned
+   to the geometric centre of .orbit-header so it stays put regardless
+   of the side groups' widths. */
 .orbit-library-btn {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   border: 1px solid #3a4a5f;
   border-radius: 999px;
   padding: 4px 10px;
@@ -56,11 +62,12 @@
   outline-offset: -1px;
 }
 
-/* Trash button injected into the orbit-ui toolbar. Same proportions as
-   Center / Random / Library. Hidden when the selection is empty so the
-   layout reads cleanly when there's nothing to delete. */
+/* Trash button injected into the orbit-ui toolbar. Same pill styling
+   as Center / Library / Random group so the toolbar reads
+   consistently. Hidden when the selection is empty so the layout
+   reads cleanly when there's nothing to delete. */
 .orbit-trash-btn {
-  border: 0;
+  border: 1px solid #3a4a5f;
   border-radius: 999px;
   padding: 4px 10px;
   background: #1a2230;
@@ -89,40 +96,55 @@
   color: #ffd0d0;
 }
 
-/* Preset count badge — pill-shaped wrapper around a count label and a
-   transparent native <select> overlay. Click anywhere on the pill →
-   showPicker() opens the native dropdown (same trick as the narrow-
-   mode random/zoom dropdowns). Visible count text comes from the inner
-   `.orbit-presets-count-label` so it doesn't get wiped when the select
-   re-renders its options. */
-.orbit-presets-count {
+/* Preset badge — pill-shaped group mirroring the Random / Zoom groups:
+   `[label-icon] | [display]` with a vertical divider. The display
+   shows the active preset's name when the current params match a
+   named preset, otherwise the count (or `K/N` when there's a
+   selection). A transparent <select> overlays the whole group as the
+   state holder. */
+.orbit-presets-group {
   position: relative;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-height: 23px;
-  min-width: 44px;
-  box-sizing: border-box;
-  padding: 4px 10px;
   border: 1px solid #3a4a5f;
   border-radius: 999px;
   background: #1a2230;
-  color: #d7dde7;
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+}
+
+.orbit-presets-group:hover {
+  background: #25324a;
+}
+
+.orbit-presets-icon {
+  padding: 4px 8px;
   font: inherit;
   font-size: 0.6rem;
   line-height: 1;
+  color: #d7dde7;
+  pointer-events: none;
+}
+
+.orbit-presets-icon.material-symbols-outlined {
+  font-size: 13px;
+  vertical-align: middle;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
+}
+
+.orbit-presets-display {
+  border-left: 1px solid #3a4a5f;
+  padding: 4px 10px;
+  min-width: 30px;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.6rem;
+  line-height: 1;
+  color: #d7dde7;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  user-select: none;
-  cursor: pointer;
-}
-
-.orbit-presets-count:hover {
-  background: #25324a;
-  color: #ffffff;
-}
-
-.orbit-presets-count-label {
+  text-align: center;
   pointer-events: none;
 }
 

@@ -13,6 +13,7 @@
 }
 
 .orbit-header {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -102,12 +103,10 @@
    selects stay in DOM (so showPicker() can still target them) but lose
    their visible track and pointer hits. The icons are wrapped in a
    click+long-press handler at the OrbitUI level: short tap = action,
-   long press = native picker. */
+   long press = native picker. The group's pill border stays so the
+   icon still reads as a pill control, consistent with the other
+   toolbar items. */
 @container orbit-header (max-width: 480px) {
-  .orbit-random-group,
-  .orbit-zoom-group {
-    border: 0;
-  }
   .orbit-random-mix,
   .orbit-zoom {
     position: absolute;
