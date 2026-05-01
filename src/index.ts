@@ -8,4 +8,5 @@ export * from './orbit-transition.js';
 export * from './orbit-calque.js';
 export * from './orbit-promotion.js';
 export * from './orbit-library-undo.js';
+export * from './orbit-param-undo.js';
 export * from './orbit-ui.js';

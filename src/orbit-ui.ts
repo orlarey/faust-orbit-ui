@@ -22,6 +22,7 @@ import { OrbitCalque } from './orbit-calque.js';
 import { extractParamSpecs, type ParamSpec } from './orbit-projection.js';
 import { PresetPromotionTracker } from './orbit-promotion.js';
 import { LibraryUndoScope, type LibraryOp } from './orbit-library-undo.js';
+import { ParamUndoScope } from './orbit-param-undo.js';
 import { computeConfigHashSync } from './orbit-hash.js';
 import { enableCustomDropdown, openDropdownMenu, type DropdownItem } from './orbit-dropdown.js';
 import type {
@@ -93,6 +94,11 @@ export class OrbitUI {
   private readonly onKeyDown: (e: KeyboardEvent) => void;
   private readonly tracker: PresetPromotionTracker;
   private readonly libraryUndo: LibraryUndoScope;
+  private readonly paramUndo: ParamUndoScope;
+  /** Audible config snapshot taken at the START of a gesture
+   *  (wrappedInteractionStart). Paired with the END snapshot in
+   *  wrappedInteractionEnd to build a ParamOp for the undo scope. */
+  private gestureBefore: Record<string, number> | null = null;
   private wrappedInteractionStart!: () => void;
   private wrappedInteractionEnd!: () => void;
   private tickerId: number | null = null;
@@ -132,17 +138,30 @@ export class OrbitUI {
     };
     this.tracker = new PresetPromotionTracker();
     this.libraryUndo = new LibraryUndoScope();
+    this.paramUndo = new ParamUndoScope();
 
     const userStart = options.onInteractionStart;
     const userEnd = options.onInteractionEnd;
     const wrappedStart = (): void => {
       this.tracker.setInGesture(true);
+      // Capture the audible state at the start of the gesture so we
+      // can build a {before, after} ParamOp on end.
+      this.gestureBefore = this.canonicalCurrentConfig();
       userStart?.();
     };
     const wrappedEnd = (): void => {
       this.tracker.setInGesture(false);
       this.tracker.recordCommit();
       this.recordTrajectoryCommit();
+      // Build a param undo op from the gesture's before/after pair.
+      // Skipped silently when before === after (press-without-drag).
+      if (this.gestureBefore) {
+        this.paramUndo.record({
+          before: this.gestureBefore,
+          after: this.canonicalCurrentConfig(),
+        });
+        this.gestureBefore = null;
+      }
       userEnd?.();
     };
     // Save references so non-pointer code paths (recall menu, etc.)
@@ -273,6 +292,9 @@ export class OrbitUI {
   setParams(config: Readonly<Record<string, number>>): void {
     if (!config || typeof config !== 'object') return;
     this.inner.setParams(config);
+    // Host pushed an external state — the param undo history is no
+    // longer coherent with what's audible.
+    this.paramUndo.clear();
     this.updatePresetsBadge();
   }
 
@@ -360,8 +382,29 @@ export class OrbitUI {
     return true;
   }
 
-  undoParams(): boolean { return false; }
-  redoParams(): boolean { return false; }
+  undoParams(): boolean {
+    const op = this.paramUndo.popUndo();
+    if (!op) return false;
+    this.applyParamConfig(op.before);
+    return true;
+  }
+  redoParams(): boolean {
+    const op = this.paramUndo.popRedo();
+    if (!op) return false;
+    this.applyParamConfig(op.after);
+    return true;
+  }
+
+  /** Apply a param configuration via inner.setParams + emit
+   *  onParamChange per address (per ORBITUIAPISPEC: undo/redo emit
+   *  onParamChange but NOT onCommit / onTrajectoryChange). */
+  private applyParamConfig(cfg: Readonly<Record<string, number>>): void {
+    this.inner.setParams(cfg);
+    for (const [path, value] of Object.entries(cfg)) {
+      this.userOnParamChange(path, value);
+    }
+    this.updatePresetsBadge();
+  }
 
   destroy(): void {
     if (this.tickerId !== null) {
