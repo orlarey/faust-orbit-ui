@@ -195,6 +195,7 @@ export class OrbitUI {
       onTrashSelected: () => this.handleTrashSelected(),
       onPresetRename: (hash, name) => this.handlePresetRename(hash, name),
       onCreatePresetAt: (projPos) => this.handleCreatePresetAt(projPos),
+      onPresetDelete: (configHash) => this.handleDeleteSinglePreset(configHash),
       onInteractionStart: wrappedStart,
       onInteractionEnd: wrappedEnd,
     });
@@ -503,6 +504,24 @@ export class OrbitUI {
     this.library.set(configHash, preset);
     this.libraryUndo.record({ kind: 'add', record: preset });
     this.calque.registerAnchorOverride(configHash, projPos);
+    this.emitLibraryChange();
+  }
+
+  /**
+   * Single-preset deletion via the calque's right-click context menu.
+   * Records a `delete` op on the library undo stack, drops the entry
+   * from the live selection if present, and emits onLibraryChange.
+   */
+  private handleDeleteSinglePreset(configHash: string): void {
+    const record = this.library.get(configHash);
+    if (!record) return;
+    this.library.delete(configHash);
+    if (this.selection.includes(configHash)) {
+      this.selection = this.selection.filter((h) => h !== configHash);
+      this.calque.setSelection(this.selection);
+      this.onSelectionChangeUser?.(this.selectionEntries());
+    }
+    this.libraryUndo.record({ kind: 'delete', record });
     this.emitLibraryChange();
   }
 

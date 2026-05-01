@@ -16,7 +16,13 @@ export type DropdownItem =
   | { kind: 'separator' };
 
 export type DropdownOptions = {
-  anchor: HTMLElement;
+  /** Anchor under which the menu opens (its bottom-left corner).
+   *  Mutually exclusive with `position`. */
+  anchor?: HTMLElement;
+  /** Open the menu directly at viewport coords — useful for context
+   *  menus triggered by `contextmenu` events. Mutually exclusive with
+   *  `anchor`. */
+  position?: { left: number; top: number };
   items: ReadonlyArray<DropdownItem>;
   onPick: (value: string) => void;
 };
@@ -31,7 +37,7 @@ export function openDropdownMenu(opts: DropdownOptions): () => void {
 
   const menu = document.createElement('div');
   menu.className = MENU_CLASS;
-  positionUnder(menu, opts.anchor);
+  positionMenu(menu, opts);
 
   for (const item of opts.items) {
     if (item.kind === 'separator') {
@@ -71,7 +77,8 @@ export function openDropdownMenu(opts: DropdownOptions): () => void {
   const onDocPointerDown = (e: PointerEvent): void => {
     const t = e.target as Node | null;
     if (!t) return;
-    if (menu.contains(t) || opts.anchor.contains(t)) return;
+    if (menu.contains(t)) return;
+    if (opts.anchor && opts.anchor.contains(t)) return;
     close();
   };
   const onKeyDown = (e: KeyboardEvent): void => {
@@ -146,9 +153,16 @@ function closeAllDropdownMenus(): void {
   document.querySelectorAll(`.${MENU_CLASS}`).forEach((el) => el.remove());
 }
 
-function positionUnder(menu: HTMLElement, anchor: HTMLElement): void {
-  const r = anchor.getBoundingClientRect();
-  menu.style.left = `${Math.round(r.left)}px`;
-  menu.style.top = `${Math.round(r.bottom + 4)}px`;
-  menu.style.minWidth = `${Math.round(r.width)}px`;
+function positionMenu(menu: HTMLElement, opts: DropdownOptions): void {
+  if (opts.anchor) {
+    const r = opts.anchor.getBoundingClientRect();
+    menu.style.left = `${Math.round(r.left)}px`;
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+    menu.style.minWidth = `${Math.round(r.width)}px`;
+    return;
+  }
+  if (opts.position) {
+    menu.style.left = `${Math.round(opts.position.left)}px`;
+    menu.style.top = `${Math.round(opts.position.top)}px`;
+  }
 }

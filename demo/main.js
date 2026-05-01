@@ -88,12 +88,18 @@ async function main() {
     const isRedo = event.shiftKey;
     const focused = document.activeElement;
     if (!(focused instanceof HTMLElement)) return;
-    if (focused.closest('.orbit-ui-overlay-active')) {
-      event.preventDefault();
+    if (!focused.closest('.orbit-ui-root')) return;
+    // Route on calque visibility, not focus. The user might click a
+    // toolbar control (trash, recall menu, …) which moves focus away
+    // from the overlay; we still want library-undo while the calque
+    // is open. The `.orbit-ui-overlay-active` class is the spec's
+    // intended signal — present iff the calque is open.
+    const calqueOpen = !!root.querySelector('.orbit-ui-overlay-active');
+    event.preventDefault();
+    if (calqueOpen) {
       const consumed = isRedo ? orbit.redoLibrary() : orbit.undoLibrary();
       log('library', isRedo ? `redo: ${consumed}` : `undo: ${consumed}`);
-    } else if (focused.closest('.orbit-ui-root')) {
-      event.preventDefault();
+    } else {
       const consumed = isRedo ? orbit.redoParams() : orbit.undoParams();
       log('param', isRedo ? `redo: ${consumed}` : `undo: ${consumed}`);
     }

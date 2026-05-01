@@ -16,6 +16,7 @@ import {
   type Projection,
 } from './orbit-projection.js';
 import { lerpCenter } from './orbit-transition.js';
+import { openDropdownMenu } from './orbit-dropdown.js';
 import type { Preset } from './orbit-types.js';
 
 const DISK_RADIUS_PX = 8;
@@ -90,6 +91,11 @@ export type OrbitCalqueOptions = {
    *  current calque session, so the host should `setLibrary` with the
    *  preset added; the calque keeps it pinned at `projPos` until close. */
   onCreatePresetAt?: (projPos: readonly [number, number]) => void;
+  /** User picked "Delete" from a preset's right-click context menu.
+   *  Caller deletes that single preset from the library (records a
+   *  delete op for library undo) and pushes the result back via
+   *  setLibrary. */
+  onPresetDelete?: (configHash: string) => void;
   /** Optional gesture bracketing for host autosave / undo. */
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
@@ -116,6 +122,7 @@ export class OrbitCalque {
   private readonly onTrashSelectedCb: (() => void) | null;
   private readonly onPresetRenameCb: ((configHash: string, name: string) => void) | null;
   private readonly onCreatePresetAtCb: ((projPos: readonly [number, number]) => void) | null;
+  private readonly onPresetDeleteCb: ((configHash: string) => void) | null;
   private readonly onInteractionStart: (() => void) | null;
   private readonly onInteractionEnd: (() => void) | null;
   private readonly resizeObs: ResizeObserver;
@@ -185,6 +192,7 @@ export class OrbitCalque {
     this.onTrashSelectedCb = opts.onTrashSelected ?? null;
     this.onPresetRenameCb = opts.onPresetRename ?? null;
     this.onCreatePresetAtCb = opts.onCreatePresetAt ?? null;
+    this.onPresetDeleteCb = opts.onPresetDelete ?? null;
     this.onInteractionStart = opts.onInteractionStart ?? null;
     this.onInteractionEnd = opts.onInteractionEnd ?? null;
 
@@ -317,6 +325,7 @@ export class OrbitCalque {
     this.overlay.addEventListener('keydown', this.handleOverlayKeyDown);
 
     this.canvas.addEventListener('dblclick', this.handleDoubleClick);
+    this.canvas.addEventListener('contextmenu', this.handleContextMenu);
     this.canvas.addEventListener('pointerleave', this.handlePointerLeave);
 
     // Capture-phase listeners on the orbit-ui root so we pre-empt
@@ -453,6 +462,7 @@ export class OrbitCalque {
     this.canvas.removeEventListener('pointerup', this.handlePointerUp);
     this.canvas.removeEventListener('pointercancel', this.handlePointerUp);
     this.canvas.removeEventListener('dblclick', this.handleDoubleClick);
+    this.canvas.removeEventListener('contextmenu', this.handleContextMenu);
     this.canvas.removeEventListener('pointerleave', this.handlePointerLeave);
     this.container.removeEventListener('change', this.handleHeaderChange, { capture: true });
     this.container.removeEventListener('click', this.handleHeaderClick, { capture: true });
@@ -1404,6 +1414,35 @@ export class OrbitCalque {
     if (sum > 0) return raw.map((r) => r / sum);
     return new Array(n).fill(0);
   }
+
+  /**
+   * Right-click on a preset → context menu with quick actions
+   * (Rename, Delete). Right-click on empty calque space is silently
+   * preventDefault'd so the browser's native context menu doesn't
+   * appear over the canvas.
+   */
+  private handleContextMenu = (e: MouseEvent): void => {
+    if (!this.visible || !this.projection) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const idx = this.hitTestPreset(e.clientX, e.clientY);
+    if (idx < 0) return;
+    const preset = this.library[idx]!;
+    openDropdownMenu({
+      position: { left: e.clientX, top: e.clientY },
+      items: [
+        { kind: 'option', value: 'rename', label: 'Rename' },
+        { kind: 'option', value: 'delete', label: 'Delete' },
+      ],
+      onPick: (value) => {
+        if (value === 'rename') {
+          this.startNameEditing(idx);
+        } else if (value === 'delete') {
+          this.onPresetDeleteCb?.(preset.configHash);
+        }
+      },
+    });
+  };
 
   private handleDoubleClick = (e: MouseEvent): void => {
     if (!this.visible || !this.bounds || !this.projection) return;
