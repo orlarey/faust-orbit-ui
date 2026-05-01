@@ -162,6 +162,17 @@
   color: #b9ccdf;
 }
 
+/* Slot wraps a slider + its value label so the two stay together
+   inside one flex item. Each slot gets flex:1, so s1 and s2 always
+   share the available space evenly. */
+.orbit-ui-overlay-slot {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .orbit-ui-overlay-portamento input[type='range'] {
   flex: 1;
   -webkit-appearance: none;
@@ -203,14 +214,16 @@
 
 /* Each slider keeps a usable minimum so it never collapses to nothing. */
 .orbit-ui-overlay-portamento input[type='range'] {
-  min-width: 60px;
+  min-width: 40px;
 }
 
-/* Tier 1: shed the value labels first — the slider thumbs convey value.
-   Reveal them again while the user is dragging or has focused the
-   matching slider (`is-active` driven by JS), but as a small bubble
-   centred above the thumb so it doesn't need horizontal room. */
-@container orbit-detail (max-width: 420px) {
+/* Tier 1: shed the inline value labels — the slider thumbs already
+   encode the value. Reveal them again while the user is dragging or
+   has focused the matching slider (`is-active` driven by JS), as a
+   small bubble centred above the thumb so it doesn't need horizontal
+   room. With the labels gone, the sliders' flex:1 takes over the slot
+   and they grow to fill it. */
+@container orbit-detail (max-width: 480px) {
   .orbit-ui-overlay-portamento-value {
     display: none;
   }
@@ -229,15 +242,6 @@
     pointer-events: none;
     z-index: 5;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
-  }
-}
-
-/* Tier 2: also drop the loop tempo slider + ↻ icon. The play button and
-   the Tp slider stay — they're the load-bearing controls. */
-@container orbit-detail (max-width: 280px) {
-  .orbit-ui-overlay-portamento .orbit-loop-icon,
-  .orbit-ui-overlay-portamento .orbit-loop-slider {
-    display: none;
   }
 }
 

@@ -12,6 +12,10 @@
   padding: 6px 10px;
   border-bottom: 1px solid #263242;
   background: #141b25;
+  /* Container query host so the toolbar can collapse to icon-only at
+     narrow widths regardless of viewport size. */
+  container-type: inline-size;
+  container-name: orbit-header;
 }
 
 /* Push the zoom group to the right edge so the toolbar reads as
@@ -31,6 +35,7 @@
 .orbit-zoom-group {
   display: inline-flex;
   align-items: center;
+  position: relative;
   border: 1px solid #3a4a5f;
   border-radius: 999px;
   overflow: hidden;
@@ -84,6 +89,34 @@
   line-height: 1;
   vertical-align: middle;
   font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
+}
+
+/* Narrow toolbar tier: collapse Random and Zoom to icon-only. The
+   selects stay in DOM (so showPicker() can still target them) but lose
+   their visible track and pointer hits. The icons are wrapped in a
+   click+long-press handler at the OrbitUI level: short tap = action,
+   long press = native picker. */
+@container orbit-header (max-width: 480px) {
+  .orbit-random-group,
+  .orbit-zoom-group {
+    border: 0;
+  }
+  .orbit-random-mix,
+  .orbit-zoom {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .orbit-random-btn,
+  .orbit-zoom-label {
+    cursor: pointer;
+  }
 }
 
 .orbit-body {

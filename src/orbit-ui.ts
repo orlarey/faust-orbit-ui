@@ -133,6 +133,7 @@ export class OrbitUI {
     this.updateTrashButtonVisibility();
     this.onKeyDown = (e) => this.handleKeyDown(e);
     this.container.addEventListener('keydown', this.onKeyDown);
+    this.installNarrowToolbarHandlers();
 
     this.tickerId = window.setInterval(() => this.tickPromotion(), PROMOTION_TICK_MS);
   }
@@ -461,6 +462,98 @@ export class OrbitUI {
     const visible = this.calque.isVisible();
     this.toggleButton.setAttribute('aria-pressed', String(visible));
     this.tracker.setOverlayActive(visible);
+  }
+
+  /**
+   * Long-press detection on the Random and Zoom toolbar buttons. At
+   * narrow widths (container query in CSS) the dropdowns collapse to
+   * icon-only; this handler routes:
+   *   • short tap on Random → falls through to FaustOrbitUI / calque so
+   *     the random action fires with the current mix value,
+   *   • short tap on the Zoom icon → cycle to the next zoom level,
+   *   • long press on either → open the native select picker.
+   * At wider widths, the dropdowns are visible and used directly; the
+   * long-press still works as a redundant access path.
+   */
+  private installNarrowToolbarHandlers(): void {
+    const LONG_PRESS_MS = 400;
+    const randomBtn = this.container.querySelector<HTMLElement>('.orbit-random-btn');
+    const randomMix = this.container.querySelector<HTMLSelectElement>('.orbit-random-mix');
+    const zoomLabel = this.container.querySelector<HTMLElement>('.orbit-zoom-label');
+    const zoomSelect = this.container.querySelector<HTMLSelectElement>('.orbit-zoom');
+
+    const bindLongPress = (
+      target: HTMLElement,
+      select: HTMLSelectElement,
+      onShortClick: ((e: MouseEvent) => void) | null,
+    ): void => {
+      let pressedAt = 0;
+      let timer: number | null = null;
+      let firedLong = false;
+      target.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        pressedAt = performance.now();
+        firedLong = false;
+        timer = window.setTimeout(() => {
+          firedLong = true;
+          timer = null;
+          // Open the native picker if available; older browsers fall back
+          // to focusing the select (which still lets the user open it
+          // with a subsequent click / Space).
+          if (typeof (select as unknown as { showPicker?: () => void }).showPicker === 'function') {
+            try { (select as unknown as { showPicker: () => void }).showPicker(); }
+            catch { select.focus(); }
+          } else {
+            select.focus();
+          }
+        }, LONG_PRESS_MS);
+      });
+      const cancel = (): void => {
+        if (timer !== null) { clearTimeout(timer); timer = null; }
+      };
+      target.addEventListener('pointerup', (e) => {
+        const heldFor = performance.now() - pressedAt;
+        cancel();
+        if (firedLong) {
+          // Suppress the click that would otherwise follow.
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        if (heldFor >= LONG_PRESS_MS) return;
+        onShortClick?.(e);
+      });
+      target.addEventListener('pointercancel', cancel);
+      target.addEventListener('pointerleave', cancel);
+      // Suppress the auto-fired click after a long-press.
+      target.addEventListener('click', (e) => {
+        if (firedLong) {
+          firedLong = false;
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }, true);
+    };
+
+    if (randomBtn && randomMix) {
+      // Random short-click already does the right thing through the
+      // native button click handler (FaustOrbitUI's random or the
+      // calque's intercept), so we don't need a custom short-click.
+      bindLongPress(randomBtn, randomMix, null);
+    }
+
+    if (zoomLabel && zoomSelect) {
+      bindLongPress(zoomLabel, zoomSelect, () => {
+        // Cycle to the next zoom option, then dispatch a `change` event
+        // so the host (FaustOrbitUI or the calque's intercept) applies it.
+        const options = Array.from(zoomSelect.options);
+        if (options.length === 0) return;
+        const cur = options.findIndex((o) => o.value === zoomSelect.value);
+        const next = options[(cur + 1) % options.length]!;
+        zoomSelect.value = next.value;
+        zoomSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    }
   }
 
   private handleKeyDown(e: KeyboardEvent): void {

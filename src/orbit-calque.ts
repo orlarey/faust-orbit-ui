@@ -199,15 +199,27 @@ export class OrbitCalque {
     this.nameInput.addEventListener('blur', this.handleNameBlur);
     this.overlay.appendChild(this.nameInput);
 
-    // Portamento bottom bar — slider + ms label, anchored at the bottom
-    // of the overlay. The Tp value drives cursor-arrow nav glides.
+    // Bottom bar layout: |i1| s1 |i2| s2 |i3|
+    //   i1 = → (Tp icon),       s1 = Tp slider + value,
+    //   i2 = ▶/■ (play/stop),   s2 = BPM slider + value,
+    //   i3 = ↻ (BPM icon).
+    // Sliders share the available horizontal space evenly via flex:1
+    // on each slot. At narrow width the value labels collapse and the
+    // sliders take the full slot; the value reappears as a tooltip
+    // above the thumb during drag.
     this.portamentoBar = document.createElement('div');
     this.portamentoBar.className = 'orbit-ui-overlay-portamento';
+
+    // i1 — portamento icon
     const ptIcon = document.createElement('span');
     ptIcon.className = 'orbit-ui-overlay-portamento-icon material-symbols-outlined';
     ptIcon.textContent = 'arrow_forward';
     ptIcon.title = 'Portamento (Tp)';
     this.portamentoBar.appendChild(ptIcon);
+
+    // s1 — Tp slider + value
+    const ptSlot = document.createElement('div');
+    ptSlot.className = 'orbit-ui-overlay-slot';
     this.portamentoSlider = document.createElement('input');
     this.portamentoSlider.type = 'range';
     this.portamentoSlider.min = '0';
@@ -216,11 +228,12 @@ export class OrbitCalque {
     this.portamentoSlider.value = String(valueToLogSlider(this.portamentoMs, PORTAMENTO_MIN_MS, PORTAMENTO_MAX_MS));
     this.portamentoSlider.title = 'Portamento glide time';
     this.portamentoSlider.className = 'orbit-pt-slider';
-    this.portamentoBar.appendChild(this.portamentoSlider);
+    ptSlot.appendChild(this.portamentoSlider);
     this.portamentoLabel = document.createElement('span');
     this.portamentoLabel.className = 'orbit-ui-overlay-portamento-value orbit-pt-value';
     this.portamentoLabel.textContent = formatMs(this.portamentoMs);
-    this.portamentoBar.appendChild(this.portamentoLabel);
+    ptSlot.appendChild(this.portamentoLabel);
+    this.portamentoBar.appendChild(ptSlot);
     this.portamentoSlider.addEventListener('input', () => {
       const s = Number(this.portamentoSlider.value);
       if (!Number.isFinite(s)) return;
@@ -229,7 +242,7 @@ export class OrbitCalque {
     });
     bindActiveValueLabel(this.portamentoSlider, this.portamentoLabel, this.portamentoBar);
 
-    // Loop controls — button (▶/■), tempo icon (↻), BPM slider, BPM label.
+    // i2 — play/stop button
     this.loopButton = document.createElement('button');
     this.loopButton.type = 'button';
     this.loopButton.className = 'orbit-ui-overlay-loop-btn';
@@ -241,11 +254,10 @@ export class OrbitCalque {
       else this.startLoop();
     });
     this.portamentoBar.appendChild(this.loopButton);
-    const loopIcon = document.createElement('span');
-    loopIcon.className = 'orbit-ui-overlay-portamento-icon orbit-loop-icon';
-    loopIcon.textContent = '↻';
-    loopIcon.title = 'Loop tempo (1 cycle = 1 bar at 4/4)';
-    this.portamentoBar.appendChild(loopIcon);
+
+    // s2 — BPM slider + value
+    const loopSlot = document.createElement('div');
+    loopSlot.className = 'orbit-ui-overlay-slot';
     this.loopSlider = document.createElement('input');
     this.loopSlider.type = 'range';
     this.loopSlider.min = '0';
@@ -254,11 +266,12 @@ export class OrbitCalque {
     this.loopSlider.value = String(valueToLogSlider(cycleMsToBpm(this.loopMs), LOOP_MIN_BPM, LOOP_MAX_BPM));
     this.loopSlider.title = 'Loop tempo';
     this.loopSlider.className = 'orbit-loop-slider';
-    this.portamentoBar.appendChild(this.loopSlider);
+    loopSlot.appendChild(this.loopSlider);
     this.loopLabel = document.createElement('span');
     this.loopLabel.className = 'orbit-ui-overlay-portamento-value orbit-loop-value';
     this.loopLabel.textContent = `${cycleMsToBpm(this.loopMs)} BPM`;
-    this.portamentoBar.appendChild(this.loopLabel);
+    loopSlot.appendChild(this.loopLabel);
+    this.portamentoBar.appendChild(loopSlot);
     this.loopSlider.addEventListener('input', () => {
       const s = Number(this.loopSlider.value);
       if (!Number.isFinite(s)) return;
@@ -267,6 +280,13 @@ export class OrbitCalque {
       this.loopLabel.textContent = `${Math.round(bpm)} BPM`;
     });
     bindActiveValueLabel(this.loopSlider, this.loopLabel, this.portamentoBar);
+
+    // i3 — BPM icon
+    const loopIcon = document.createElement('span');
+    loopIcon.className = 'orbit-ui-overlay-portamento-icon orbit-loop-icon';
+    loopIcon.textContent = '↻';
+    loopIcon.title = 'Loop tempo (1 cycle = 1 bar at 4/4)';
+    this.portamentoBar.appendChild(loopIcon);
 
     this.portamentoBar.style.display = 'none';
     // Append to .orbit-detail (with position:relative set in CSS) so the
