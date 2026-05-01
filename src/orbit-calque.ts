@@ -15,6 +15,7 @@ import {
   type ParamSpec,
   type Projection,
 } from './orbit-projection.js';
+import { TransitionTimer, lerpCenter } from './orbit-transition.js';
 import type { Preset } from './orbit-types.js';
 
 const DISK_RADIUS_PX = 8;
@@ -25,6 +26,17 @@ const CENTER_HIT_RADIUS_PX = 14;
 const MARGIN_PX = 24;
 const SELECTION_RING_RADIUS_PX = 14;
 const CONTRIBUTION_THRESHOLD = 0.001;
+/** Portamento bounds (ms) — same convention as webdaw. The slider runs
+ *  on integer [0, SLIDER_RES] with a log map t = min·(max/min)^(s/RES). */
+const PORTAMENTO_MIN_MS = 20;
+const PORTAMENTO_MAX_MS = 3000;
+const PORTAMENTO_DEFAULT_MS = 400;
+const SLIDER_RES = 1000;
+/** Loop tempo bounds in BPM. One cycle = one bar at 4/4 → 60_000·4/BPM ms. */
+const LOOP_MIN_BPM = 30;
+const LOOP_MAX_BPM = 240;
+const LOOP_BAR_BEATS = 4;
+const LOOP_DEFAULT_BPM = 120;
 /** Pink for auto-promoted (anonymous) presets — same convention as webdaw. */
 const PRESET_FILL_ANONYMOUS = 'rgb(232, 110, 158)';
 /** Gold for named (permanent) presets — visually distinct from the crowd. */
@@ -71,10 +83,17 @@ export type OrbitCalqueOptions = {
 export class OrbitCalque {
   private readonly container: HTMLElement;
   private readonly orbitBody: HTMLElement;
+  private readonly orbitDetail: HTMLElement;
   private readonly overlay: HTMLDivElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly nameInput: HTMLInputElement;
+  private readonly portamentoBar: HTMLDivElement;
+  private readonly portamentoSlider: HTMLInputElement;
+  private readonly portamentoLabel: HTMLSpanElement;
+  private readonly loopButton: HTMLButtonElement;
+  private readonly loopSlider: HTMLInputElement;
+  private readonly loopLabel: HTMLSpanElement;
   private readonly paramSpecs: ReadonlyArray<ParamSpec>;
   private readonly getCurrentParams: () => Record<string, number>;
   private readonly onApply: (cfg: Record<string, number>) => void;
@@ -109,6 +128,20 @@ export class OrbitCalque {
    *  click-time but the disc is pinned to where the user clicked. Cleared
    *  on hide() and on every full projection recompute. */
   private anchorOverrides: Map<string, readonly [number, number]> = new Map();
+  /** Cursor portamento — animates centerProj from start to target over
+   *  `portamentoMs` and applies Shepard at each step. */
+  private readonly transitionTimer: TransitionTimer = new TransitionTimer();
+  private transitionStart: readonly [number, number] | null = null;
+  private transitionTarget: readonly [number, number] | null = null;
+  private transitionRafId: number | null = null;
+  private portamentoMs: number = PORTAMENTO_DEFAULT_MS;
+  /** Loop state: cycle duration (ms = full bar at the slider's BPM),
+   *  active flag, current step into the selection, and the timestamp at
+   *  which the current "hold" phase started (between two glides). */
+  private loopMs: number = bpmToCycleMs(LOOP_DEFAULT_BPM);
+  private loopActive: boolean = false;
+  private loopIndex: number = 0;
+  private loopHoldStartedAt: number | null = null;
   private bounds: Bounds | null = null;
   private centerProj: readonly [number, number] | null = null;
   private dragMode: DragMode = 'none';
@@ -142,6 +175,11 @@ export class OrbitCalque {
       throw new Error('OrbitCalque: .orbit-body not found inside container');
     }
     this.orbitBody = body;
+    const detail = this.container.querySelector<HTMLElement>('.orbit-detail');
+    if (!detail) {
+      throw new Error('OrbitCalque: .orbit-detail not found inside container');
+    }
+    this.orbitDetail = detail;
 
     this.overlay = document.createElement('div');
     this.overlay.className = 'orbit-ui-overlay';
@@ -160,6 +198,83 @@ export class OrbitCalque {
     this.nameInput.addEventListener('keydown', this.handleNameKeyDown);
     this.nameInput.addEventListener('blur', this.handleNameBlur);
     this.overlay.appendChild(this.nameInput);
+
+    // Portamento bottom bar — slider + ms label, anchored at the bottom
+    // of the overlay. The Tp value drives cursor-arrow nav glides.
+    this.portamentoBar = document.createElement('div');
+    this.portamentoBar.className = 'orbit-ui-overlay-portamento';
+    const ptIcon = document.createElement('span');
+    ptIcon.className = 'orbit-ui-overlay-portamento-icon material-symbols-outlined';
+    ptIcon.textContent = 'arrow_forward';
+    ptIcon.title = 'Portamento (Tp)';
+    this.portamentoBar.appendChild(ptIcon);
+    this.portamentoSlider = document.createElement('input');
+    this.portamentoSlider.type = 'range';
+    this.portamentoSlider.min = '0';
+    this.portamentoSlider.max = String(SLIDER_RES);
+    this.portamentoSlider.step = '1';
+    this.portamentoSlider.value = String(valueToLogSlider(this.portamentoMs, PORTAMENTO_MIN_MS, PORTAMENTO_MAX_MS));
+    this.portamentoSlider.title = 'Portamento glide time';
+    this.portamentoSlider.className = 'orbit-pt-slider';
+    this.portamentoBar.appendChild(this.portamentoSlider);
+    this.portamentoLabel = document.createElement('span');
+    this.portamentoLabel.className = 'orbit-ui-overlay-portamento-value orbit-pt-value';
+    this.portamentoLabel.textContent = formatMs(this.portamentoMs);
+    this.portamentoBar.appendChild(this.portamentoLabel);
+    this.portamentoSlider.addEventListener('input', () => {
+      const s = Number(this.portamentoSlider.value);
+      if (!Number.isFinite(s)) return;
+      this.portamentoMs = logSliderToValue(s, PORTAMENTO_MIN_MS, PORTAMENTO_MAX_MS);
+      this.portamentoLabel.textContent = formatMs(this.portamentoMs);
+    });
+    bindActiveValueLabel(this.portamentoSlider, this.portamentoLabel, this.portamentoBar);
+
+    // Loop controls — button (▶/■), tempo icon (↻), BPM slider, BPM label.
+    this.loopButton = document.createElement('button');
+    this.loopButton.type = 'button';
+    this.loopButton.className = 'orbit-ui-overlay-loop-btn';
+    this.loopButton.textContent = '▶';
+    this.loopButton.title = 'Loop the selection';
+    this.loopButton.disabled = true;
+    this.loopButton.addEventListener('click', () => {
+      if (this.loopActive) this.stopLoop();
+      else this.startLoop();
+    });
+    this.portamentoBar.appendChild(this.loopButton);
+    const loopIcon = document.createElement('span');
+    loopIcon.className = 'orbit-ui-overlay-portamento-icon orbit-loop-icon';
+    loopIcon.textContent = '↻';
+    loopIcon.title = 'Loop tempo (1 cycle = 1 bar at 4/4)';
+    this.portamentoBar.appendChild(loopIcon);
+    this.loopSlider = document.createElement('input');
+    this.loopSlider.type = 'range';
+    this.loopSlider.min = '0';
+    this.loopSlider.max = String(SLIDER_RES);
+    this.loopSlider.step = '1';
+    this.loopSlider.value = String(valueToLogSlider(cycleMsToBpm(this.loopMs), LOOP_MIN_BPM, LOOP_MAX_BPM));
+    this.loopSlider.title = 'Loop tempo';
+    this.loopSlider.className = 'orbit-loop-slider';
+    this.portamentoBar.appendChild(this.loopSlider);
+    this.loopLabel = document.createElement('span');
+    this.loopLabel.className = 'orbit-ui-overlay-portamento-value orbit-loop-value';
+    this.loopLabel.textContent = `${cycleMsToBpm(this.loopMs)} BPM`;
+    this.portamentoBar.appendChild(this.loopLabel);
+    this.loopSlider.addEventListener('input', () => {
+      const s = Number(this.loopSlider.value);
+      if (!Number.isFinite(s)) return;
+      const bpm = logSliderToValue(s, LOOP_MIN_BPM, LOOP_MAX_BPM);
+      this.loopMs = bpmToCycleMs(bpm);
+      this.loopLabel.textContent = `${Math.round(bpm)} BPM`;
+    });
+    bindActiveValueLabel(this.loopSlider, this.loopLabel, this.portamentoBar);
+
+    this.portamentoBar.style.display = 'none';
+    // Append to .orbit-detail (with position:relative set in CSS) so the
+    // bar overlays the orbit-ui's own detail-slider area while the calque
+    // is open — same convention as webdaw.
+    this.orbitDetail.appendChild(this.portamentoBar);
+
+    this.overlay.addEventListener('keydown', this.handleOverlayKeyDown);
 
     this.canvas.addEventListener('dblclick', this.handleDoubleClick);
     this.canvas.addEventListener('pointerleave', this.handlePointerLeave);
@@ -192,9 +307,11 @@ export class OrbitCalque {
     this.recomputeOrderRank();
     // Drop selection entries that no longer reference an existing preset.
     const known = new Set(records.map((p) => p.configHash));
+    let pruned = false;
     for (const h of this.selection) {
-      if (!known.has(h)) this.selection.delete(h);
+      if (!known.has(h)) { this.selection.delete(h); pruned = true; }
     }
+    if (pruned) this.updateLoopButtonEnabled();
     if (this.visible) {
       // Calque is open → keep the PCA basis frozen so the existing
       // arrangement of dots doesn't shuffle under the user's hands.
@@ -210,6 +327,7 @@ export class OrbitCalque {
    *  NOT emit onSelectionChange. */
   setSelection(configHashes: ReadonlyArray<string>): void {
     this.selection = new Set(configHashes);
+    this.updateLoopButtonEnabled();
     if (this.visible) this.scheduleRender();
   }
 
@@ -224,6 +342,7 @@ export class OrbitCalque {
     if (this.visible) return;
     this.visible = true;
     this.overlay.style.display = '';
+    this.portamentoBar.style.display = '';
     this.overlay.classList.add('orbit-ui-overlay-active');
     this.recomputeProjection();
     if (this.projection) {
@@ -244,9 +363,11 @@ export class OrbitCalque {
   hide(): void {
     if (!this.visible) return;
     this.cancelNameEditing();
+    this.cancelTransition();
     this.visible = false;
     this.overlay.classList.remove('orbit-ui-overlay-active');
     this.overlay.style.display = 'none';
+    this.portamentoBar.style.display = 'none';
     this.dragMode = 'none';
     this.marquee = null;
     // Drop session-local visual overrides — the next show() recomputes
@@ -271,8 +392,11 @@ export class OrbitCalque {
     this.container.removeEventListener('click', this.handleHeaderClick, { capture: true });
     this.nameInput.removeEventListener('keydown', this.handleNameKeyDown);
     this.nameInput.removeEventListener('blur', this.handleNameBlur);
+    this.overlay.removeEventListener('keydown', this.handleOverlayKeyDown);
+    this.cancelTransition();
     this.resizeObs.disconnect();
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
+    this.portamentoBar.remove();
     this.overlay.remove();
   }
 
@@ -636,6 +760,8 @@ export class OrbitCalque {
     if (!this.visible || !this.projection) return;
     e.preventDefault();
     this.canvas.setPointerCapture(e.pointerId);
+    // A press pre-empts any in-flight glide so direct manipulation wins.
+    this.cancelTransition();
 
     if (e.shiftKey) {
       // Shift+click on a preset → toggle in selection (additive).
@@ -855,6 +981,7 @@ export class OrbitCalque {
   }
 
   private emitSelection(): void {
+    this.updateLoopButtonEnabled();
     this.onSelectionChangeCb?.(Array.from(this.selection));
   }
 
@@ -883,6 +1010,201 @@ export class OrbitCalque {
       this.paramSpecs,
     );
     this.onApply(cfg);
+  }
+
+  /**
+   * Cursor arrow navigation: ←/→ steps through presets in
+   * `lastSeenAt`-ascending order, wrapping at the ends. The centre
+   * cross glides via Shepard interpolation over `portamentoMs`.
+   */
+  private handleOverlayKeyDown = (e: KeyboardEvent): void => {
+    if (!this.visible || !this.projection) return;
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    if (this.dragMode !== 'none') return;
+    if (this.library.length === 0) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.cursorStep(e.key === 'ArrowLeft' ? -1 : 1);
+  };
+
+  private cursorStep(delta: -1 | 1): void {
+    const ordered = this.orderedPresets();
+    if (ordered.length === 0) return;
+    const currentIdx = this.findOrderedIndexUnderCentre(ordered);
+    const n = ordered.length;
+    const nextIdx = currentIdx < 0
+      ? (delta < 0 ? n - 1 : 0)
+      : (((currentIdx + delta) % n) + n) % n;
+    const next = ordered[nextIdx];
+    if (!next) return;
+    const targetVisualIndex = this.library.findIndex((p) => p.configHash === next.configHash);
+    if (targetVisualIndex < 0) return;
+    const target = this.visualPositions[targetVisualIndex];
+    if (!target) return;
+    this.startCenterTransition(target);
+  }
+
+  private orderedPresets(): ReadonlyArray<Preset> {
+    return [...this.library].sort((a, b) => a.lastSeenAt - b.lastSeenAt);
+  }
+
+  /** Find the preset (in lastSeenAt order) currently sitting under the
+   *  centre cross — within ~12px in canvas pixels. -1 if none close. */
+  private findOrderedIndexUnderCentre(ordered: ReadonlyArray<Preset>): number {
+    if (!this.centerProj || !this.bounds) return -1;
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return -1;
+    const map = makeProjToCanvas(this.bounds, rect.width, rect.height, this.zoom, this.viewportCenterProj);
+    const cx = map.x(this.centerProj[0]);
+    const cy = map.y(this.centerProj[1]);
+    const threshold = POINT_HIT_RADIUS_PX;
+    let bestI = -1;
+    let bestD = threshold;
+    for (let i = 0; i < ordered.length; i += 1) {
+      const idx = this.library.findIndex((p) => p.configHash === ordered[i]!.configHash);
+      const pos = idx >= 0 ? this.visualPositions[idx] : undefined;
+      if (!pos) continue;
+      const d = Math.hypot(map.x(pos[0]) - cx, map.y(pos[1]) - cy);
+      if (d <= bestD) { bestD = d; bestI = i; }
+    }
+    return bestI;
+  }
+
+  private startCenterTransition(target: readonly [number, number]): void {
+    if (!this.centerProj) {
+      this.centerProj = target;
+      this.applyCentre();
+      this.scheduleRender();
+      return;
+    }
+    if (this.portamentoMs <= 0) {
+      this.centerProj = target;
+      this.applyCentre();
+      this.scheduleRender();
+      return;
+    }
+    this.transitionStart = [this.centerProj[0], this.centerProj[1]];
+    this.transitionTarget = [target[0], target[1]];
+    this.transitionTimer.start(this.portamentoMs, performance.now());
+    this.onInteractionStart?.();
+    this.runTransitionRaf();
+  }
+
+  private runTransitionRaf(): void {
+    if (this.transitionRafId !== null) return;
+    const tick = (): void => {
+      this.transitionRafId = null;
+      const more = this.advanceTransition(performance.now());
+      if (more) this.transitionRafId = requestAnimationFrame(tick);
+      else if (!this.loopActive) this.onInteractionEnd?.();
+    };
+    this.transitionRafId = requestAnimationFrame(tick);
+  }
+
+  private advanceTransition(now: number): boolean {
+    if (!this.transitionStart || !this.transitionTarget) {
+      return this.loopActive ? this.tickLoopHold(now) : false;
+    }
+    const alpha = this.transitionTimer.alpha(now);
+    if (alpha === null) {
+      return this.loopActive ? this.tickLoopHold(now) : false;
+    }
+    this.centerProj = lerpCenter(this.transitionStart, this.transitionTarget, alpha);
+    this.applyCentre();
+    this.scheduleRender();
+    if (alpha < 1) return true;
+    return this.loopActive ? this.tickLoopHold(now) : false;
+  }
+
+  private cancelTransition(): void {
+    this.stopLoop();
+    if (this.transitionRafId !== null) {
+      cancelAnimationFrame(this.transitionRafId);
+      this.transitionRafId = null;
+    }
+    this.transitionTimer.stop();
+    this.transitionStart = null;
+    this.transitionTarget = null;
+  }
+
+  // ------------------------------------------------------------------------
+  // Loop mode (cyclic playback through the selection)
+  // ------------------------------------------------------------------------
+
+  private startLoop(): void {
+    if (this.loopActive) return;
+    if (this.selection.size === 0) return;
+    this.loopActive = true;
+    this.loopHoldStartedAt = null;
+    this.loopIndex = 0;
+    this.loopButton.textContent = '■'; // ■
+    this.loopButton.title = 'Stop loop';
+    this.armNextLoopStep();
+    this.runTransitionRaf();
+  }
+
+  private stopLoop(): void {
+    if (!this.loopActive) return;
+    this.loopActive = false;
+    this.loopHoldStartedAt = null;
+    this.loopButton.textContent = '▶'; // ▶
+    this.loopButton.title = 'Loop the selection';
+  }
+
+  private armNextLoopStep(): void {
+    if (!this.projection) return;
+    const hashes = Array.from(this.selection);
+    if (hashes.length === 0) {
+      this.stopLoop();
+      return;
+    }
+    const targetHash = hashes[this.loopIndex % hashes.length];
+    if (!targetHash) return;
+    const idx = this.library.findIndex((p) => p.configHash === targetHash);
+    if (idx < 0) {
+      // Preset was deleted between two steps. Restart at index 0 next tick.
+      this.loopIndex = 0;
+      return;
+    }
+    const target = this.visualPositions[idx];
+    if (!target) return;
+    if (!this.centerProj) this.centerProj = target;
+    this.transitionStart = [this.centerProj[0], this.centerProj[1]];
+    this.transitionTarget = [target[0], target[1]];
+    this.transitionTimer.start(this.portamentoMs, performance.now());
+  }
+
+  /**
+   * Hold phase between two preset glides. `loopMs` is the full cycle
+   * duration; per-step duration is `cycle / m` where m is the live
+   * selection size — adding/removing presets during the loop changes
+   * the density, not the tempo. Hold = perStep − Tp.
+   */
+  private tickLoopHold(now: number): boolean {
+    const hashes = Array.from(this.selection);
+    if (hashes.length === 0) {
+      this.stopLoop();
+      return false;
+    }
+    if (this.loopHoldStartedAt === null) {
+      this.loopHoldStartedAt = now;
+      return true;
+    }
+    const tp = Math.max(0, this.portamentoMs);
+    const perStep = Math.max(this.loopMs / hashes.length, tp);
+    const holdMs = Math.max(0, perStep - tp);
+    if (now - this.loopHoldStartedAt < holdMs) return true;
+    this.loopHoldStartedAt = null;
+    this.loopIndex = (this.loopIndex + 1) % hashes.length;
+    this.armNextLoopStep();
+    return true;
+  }
+
+  private updateLoopButtonEnabled(): void {
+    const enabled = this.selection.size > 0;
+    this.loopButton.disabled = !enabled;
+    if (!enabled && this.loopActive) this.stopLoop();
   }
 
   /**
@@ -1032,6 +1354,79 @@ function computeBounds(points: ReadonlyArray<readonly [number, number]>): Bounds
     minY: cy - span / 2,
     maxY: cy + span / 2,
   };
+}
+
+const THUMB_WIDTH_PX = 12;
+
+/**
+ * Toggle an `is-active` class on the value label whenever the slider is
+ * being dragged or focused, AND keep its `left` style synced to the
+ * thumb's centre x within the bar. Combined with the narrow-tier
+ * container query in CSS, this turns the inline value into a floating
+ * tooltip that hovers above the thumb while the user is interacting.
+ */
+function bindActiveValueLabel(
+  slider: HTMLInputElement,
+  label: HTMLElement,
+  bar: HTMLElement,
+): void {
+  let pressed = false;
+  let focused = false;
+  const updatePosition = (): void => {
+    const sliderRect = slider.getBoundingClientRect();
+    const barRect = bar.getBoundingClientRect();
+    if (sliderRect.width <= 0) return;
+    const min = Number(slider.min || '0');
+    const max = Number(slider.max || '100');
+    const value = Number(slider.value || '0');
+    const span = max - min || 1;
+    const ratio = Math.max(0, Math.min(1, (value - min) / span));
+    const thumbCx = (sliderRect.width - THUMB_WIDTH_PX) * ratio + THUMB_WIDTH_PX / 2;
+    const x = sliderRect.left - barRect.left + thumbCx;
+    label.style.left = `${x}px`;
+  };
+  const sync = (): void => {
+    const active = pressed || focused;
+    label.classList.toggle('is-active', active);
+    if (active) updatePosition();
+  };
+  slider.addEventListener('pointerdown', () => { pressed = true; sync(); });
+  window.addEventListener('pointerup', () => {
+    if (!pressed) return;
+    pressed = false;
+    sync();
+  });
+  slider.addEventListener('pointercancel', () => { pressed = false; sync(); });
+  slider.addEventListener('focus', () => { focused = true; sync(); });
+  slider.addEventListener('blur', () => { focused = false; sync(); });
+  // Keep the tooltip glued to the thumb while the value changes
+  // (drag input, keyboard arrows on the focused slider).
+  slider.addEventListener('input', () => {
+    if (pressed || focused) updatePosition();
+  });
+}
+
+function bpmToCycleMs(bpm: number): number {
+  // One cycle = one bar at 4/4. Cycle (ms) = 60_000 · 4 / BPM.
+  return Math.max(1, 60_000 * LOOP_BAR_BEATS / Math.max(1, bpm));
+}
+
+function cycleMsToBpm(cycleMs: number): number {
+  return 60_000 * LOOP_BAR_BEATS / Math.max(1, cycleMs);
+}
+
+function logSliderToValue(s: number, min: number, max: number): number {
+  const ratio = max / min;
+  return min * Math.pow(ratio, s / SLIDER_RES);
+}
+
+function valueToLogSlider(v: number, min: number, max: number): number {
+  const ratio = max / min;
+  return Math.round(SLIDER_RES * Math.log(v / min) / Math.log(ratio));
+}
+
+function formatMs(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 }
 
 function roundRect(

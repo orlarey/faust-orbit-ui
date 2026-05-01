@@ -134,3 +134,130 @@
   border-color: #e8c562;
   box-shadow: 0 0 0 2px rgba(232, 197, 98, 0.25);
 }
+
+/* Portamento bar — overlays the orbit-ui's own detail bar (the bottom
+   slider area) while the calque is open. Same convention as webdaw:
+   covers the host's detail content with an opaque backdrop so the
+   slider is fully replaced by the Tp control. */
+.orbit-ui-overlay-portamento {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  background: rgba(20, 27, 37, 0.96);
+  border-top: 1px solid #263242;
+  z-index: 4;
+  color: #d7dde7;
+  font: inherit;
+  font-size: 0.6rem;
+  line-height: 1;
+}
+
+.orbit-ui-overlay-portamento-icon {
+  font-size: 14px;
+  line-height: 1;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
+  color: #b9ccdf;
+}
+
+.orbit-ui-overlay-portamento input[type='range'] {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: #263242;
+  outline: none;
+  cursor: pointer;
+  margin: 0;
+}
+
+.orbit-ui-overlay-portamento input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #d7dde7;
+  border: 2px solid #0d1016;
+  cursor: pointer;
+}
+
+.orbit-ui-overlay-portamento input[type='range']::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #d7dde7;
+  border: 2px solid #0d1016;
+  cursor: pointer;
+}
+
+.orbit-ui-overlay-portamento-value {
+  min-width: 56px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #b9ccdf;
+  white-space: nowrap;
+}
+
+/* Each slider keeps a usable minimum so it never collapses to nothing. */
+.orbit-ui-overlay-portamento input[type='range'] {
+  min-width: 60px;
+}
+
+/* Tier 1: shed the value labels first — the slider thumbs convey value.
+   Reveal them again while the user is dragging or has focused the
+   matching slider (`is-active` driven by JS), but as a small bubble
+   centred above the thumb so it doesn't need horizontal room. */
+@container orbit-detail (max-width: 420px) {
+  .orbit-ui-overlay-portamento-value {
+    display: none;
+  }
+  .orbit-ui-overlay-portamento-value.is-active {
+    display: inline-block;
+    position: absolute;
+    top: 0;
+    /* `left` is set inline by JS to follow the thumb. */
+    transform: translateX(-50%);
+    min-width: 0;
+    padding: 1px 6px;
+    border: 1px solid rgba(122, 215, 255, 0.45);
+    border-radius: 4px;
+    background: rgba(20, 27, 37, 0.96);
+    color: #eaf2fb;
+    pointer-events: none;
+    z-index: 5;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  }
+}
+
+/* Tier 2: also drop the loop tempo slider + ↻ icon. The play button and
+   the Tp slider stay — they're the load-bearing controls. */
+@container orbit-detail (max-width: 280px) {
+  .orbit-ui-overlay-portamento .orbit-loop-icon,
+  .orbit-ui-overlay-portamento .orbit-loop-slider {
+    display: none;
+  }
+}
+
+.orbit-ui-overlay-loop-btn {
+  border: 1px solid #3a4a5f;
+  background: #1a2230;
+  color: #d7dde7;
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 4px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.orbit-ui-overlay-loop-btn:hover:not(:disabled) {
+  background: #25324a;
+}
+
+.orbit-ui-overlay-loop-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

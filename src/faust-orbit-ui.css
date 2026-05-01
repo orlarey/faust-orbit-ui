@@ -101,6 +101,7 @@
 /* ── Detail panel (bottom bar for last-touched control) ── */
 
 .orbit-detail {
+  position: relative;
   display: grid;
   grid-template-columns: auto 1fr;
   align-items: center;
@@ -110,6 +111,10 @@
   border-top: 1px solid #263242;
   background: #141b25;
   overflow: hidden;
+  /* Container query host — the calque's portamento bar adapts its
+     layout to the detail bar's actual width (regardless of viewport). */
+  container-type: inline-size;
+  container-name: orbit-detail;
 }
 
 .orbit-detail-empty {
