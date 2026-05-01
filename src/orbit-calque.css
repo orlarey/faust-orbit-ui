@@ -90,7 +90,8 @@
 }
 
 /* Preset count badge injected into the orbit-ui toolbar — visible in
-   both modes (orbit-ui or calque). Same proportions as Center / Random
+   both modes (orbit-ui or calque). Click opens the niveau-0 recall
+   menu listing named presets. Same proportions as Center / Random
    buttons so the toolbar reads as one row. */
 .orbit-presets-count {
   display: inline-flex;
@@ -110,7 +111,74 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   user-select: none;
-  cursor: default;
+  cursor: pointer;
+}
+
+.orbit-presets-count:hover {
+  background: #25324a;
+  color: #ffffff;
+}
+
+/* Niveau-0 named-preset recall dropdown — appended to document.body so
+   it floats above any clipping context, anchored under the count badge. */
+.orbit-recall-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 160px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid #3a4a5f;
+  border-radius: 8px;
+  background: #141b25;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+  font-family: inherit;
+  font-size: 12px;
+  color: #d7dde7;
+}
+
+.orbit-recall-menu-empty {
+  padding: 8px 10px;
+  color: #7a8696;
+  font-style: italic;
+}
+
+.orbit-recall-menu-item {
+  display: block;
+  width: 100%;
+  /* Left padding reserves room for the active ✓ so all items align
+     regardless of their state. */
+  padding: 6px 10px 6px 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #d7dde7;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.orbit-recall-menu-item:hover {
+  background: rgba(232, 201, 122, 0.18);
+  color: rgb(255, 230, 170);
+}
+
+.orbit-recall-menu-item--active {
+  color: rgb(255, 230, 170);
+}
+
+.orbit-recall-menu-item--active::before {
+  content: "✓";
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: rgb(232, 201, 122);
+  font-weight: 600;
 }
 
 .orbit-ui-overlay-name-input {

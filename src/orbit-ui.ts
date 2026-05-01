@@ -210,6 +210,7 @@ export class OrbitUI {
       this.tickerId = null;
     }
     this.container.removeEventListener('keydown', this.onKeyDown);
+    this.closeRecallMenu();
     this.toggleButton.remove();
     this.trashButton.remove();
     this.presetsBadge.remove();
@@ -421,10 +422,140 @@ export class OrbitUI {
     const middle = this.container.querySelector<HTMLElement>('.orbit-middle-actions');
     const span = document.createElement('span');
     span.className = 'orbit-presets-count';
-    span.title = 'Memorised presets for this signature';
+    span.title = 'Recall a named preset';
+    span.tabIndex = 0;
+    span.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.toggleRecallMenu();
+    });
     if (middle) middle.appendChild(span);
     else this.container.appendChild(span);
     return span;
+  }
+
+  // ------------------------------------------------------------------------
+  // Recall menu (niveau-0): click the count badge to open a sorted list
+  // of named presets. Anonymous (auto-promoted) presets stay behind the
+  // calque — the menu is the "pinned subset". Outside click, Esc, or
+  // scroll dismiss it.
+  // ------------------------------------------------------------------------
+
+  private recallMenu: HTMLDivElement | null = null;
+  private recallMenuTeardown: (() => void) | null = null;
+
+  private toggleRecallMenu(): void {
+    if (this.recallMenu) this.closeRecallMenu();
+    else this.openRecallMenu();
+  }
+
+  private openRecallMenu(): void {
+    this.closeRecallMenu();
+    const named = this.libraryArray()
+      .filter((p) => typeof p.name === 'string' && p.name.length > 0)
+      .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }));
+    const menu = document.createElement('div');
+    menu.className = 'orbit-recall-menu';
+    this.positionRecallMenuUnder(menu, this.presetsBadge);
+
+    if (named.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'orbit-recall-menu-empty';
+      empty.textContent = 'No named presets';
+      menu.appendChild(empty);
+    } else {
+      const params = this.inner.getParamValues();
+      for (const preset of named) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'orbit-recall-menu-item';
+        if (this.matchesCurrentParams(preset, params)) {
+          item.classList.add('orbit-recall-menu-item--active');
+        }
+        item.textContent = preset.name!;
+        item.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.closeRecallMenu();
+          this.recallPreset(preset);
+        });
+        menu.appendChild(item);
+      }
+    }
+
+    document.body.appendChild(menu);
+
+    const onDocPointerDown = (e: PointerEvent): void => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (menu.contains(t) || this.presetsBadge.contains(t)) return;
+      this.closeRecallMenu();
+    };
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.closeRecallMenu();
+      }
+    };
+    const onScrollOrResize = (): void => this.closeRecallMenu();
+    document.addEventListener('pointerdown', onDocPointerDown, { capture: true });
+    document.addEventListener('keydown', onKeyDown, { capture: true });
+    window.addEventListener('scroll', onScrollOrResize, { capture: true });
+    window.addEventListener('resize', onScrollOrResize);
+
+    this.recallMenu = menu;
+    this.recallMenuTeardown = () => {
+      document.removeEventListener('pointerdown', onDocPointerDown, { capture: true });
+      document.removeEventListener('keydown', onKeyDown, { capture: true });
+      window.removeEventListener('scroll', onScrollOrResize, { capture: true });
+      window.removeEventListener('resize', onScrollOrResize);
+    };
+  }
+
+  private closeRecallMenu(): void {
+    if (this.recallMenuTeardown) { this.recallMenuTeardown(); this.recallMenuTeardown = null; }
+    if (this.recallMenu) { this.recallMenu.remove(); this.recallMenu = null; }
+  }
+
+  private positionRecallMenuUnder(menu: HTMLElement, anchor: HTMLElement): void {
+    const r = anchor.getBoundingClientRect();
+    menu.style.left = `${Math.round(r.left)}px`;
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  }
+
+  /**
+   * True iff every paramSpec address has the same value in `preset` and
+   * in `params` (within a small tolerance). Robust to presets whose
+   * stored configuration covers a subset of the spec — missing keys
+   * fall back to the spec's default on both sides.
+   */
+  private matchesCurrentParams(
+    preset: Preset,
+    params: Readonly<Record<string, number>>,
+  ): boolean {
+    for (const spec of this.paramSpecs) {
+      const a = preset.configuration[spec.address] ?? spec.default;
+      const b = params[spec.address] ?? spec.default;
+      if (Math.abs(a - b) > 1e-9) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Apply a preset's stored configuration to the audio + the inner
+   * orbit-ui. Same gesture machinery as a click on the calque disc
+   * (auto-promotion will bump lastSeenAt naturally if the user lingers
+   * past the dwell threshold).
+   */
+  private recallPreset(preset: Preset): void {
+    const cfg: Record<string, number> = {};
+    for (const spec of this.paramSpecs) {
+      cfg[spec.address] = preset.configuration[spec.address] ?? spec.default;
+    }
+    this.inner.setParams(cfg);
+    for (const [path, value] of Object.entries(cfg)) {
+      this.userOnParamChange(path, value);
+    }
   }
 
   private updatePresetsBadge(): void {
