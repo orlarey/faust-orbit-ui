@@ -322,6 +322,14 @@ export class OrbitUI {
       if (record.uiHash !== this.uiHash) continue;
       next.set(record.configHash, record);
     }
+    // Echo skip: when the incoming library is content-equivalent to the
+    // current one, this is almost certainly a self-broadcast loop (the
+    // host wrote our own onLibraryChange to its store and replayed it
+    // back through setLibrary). Re-applying it would needlessly re-render
+    // AND wipe the undo history we just appended to. Compare maps by
+    // configHash + name + lastSeenAt (the only fields that matter for
+    // visual state and recall identity).
+    if (this.libraryContentEquals(next)) return;
     this.library = next;
     // External library push invalidates the undo history.
     this.libraryUndo.clear();
@@ -329,6 +337,17 @@ export class OrbitUI {
     this.selection = this.selection.filter((h) => this.library.has(h));
     this.calque.setSelection(this.selection);
     this.updatePresetsBadge();
+  }
+
+  private libraryContentEquals(next: Map<string, Preset>): boolean {
+    if (next.size !== this.library.size) return false;
+    for (const [hash, p] of next) {
+      const cur = this.library.get(hash);
+      if (!cur) return false;
+      if (cur.lastSeenAt !== p.lastSeenAt) return false;
+      if (cur.name !== p.name) return false;
+    }
+    return true;
   }
 
   /** Replace the trajectory record from outside (initial load or

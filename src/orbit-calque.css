@@ -27,6 +27,17 @@
   font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
 }
 
+/* Re-assert the centering transform on every state of the button so a
+   host's generic `button:hover { transform: ... }` (e.g. webdaw's
+   "lift on hover" effect) cannot win the cascade and yank the button
+   off-centre. The transform here is identical to the base rule. */
+.orbit-library-btn:hover,
+.orbit-library-btn:focus,
+.orbit-library-btn:active,
+.orbit-library-btn[aria-pressed='true'] {
+  transform: translate(-50%, -50%);
+}
+
 .orbit-library-btn:hover {
   background: #25324a;
 }

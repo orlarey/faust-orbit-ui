@@ -1549,6 +1549,21 @@ export class FaustOrbitUI extends FaustUICore {
         this._requestRender();
         this._requestStateEmit();
       });
+      // Bracket the slider drag with onInteractionStart / End so hosts
+      // (and the OrbitUI wrapper's param-undo scope) treat the whole drag
+      // as a single gesture instead of one commit per intermediate value.
+      rangeInput.addEventListener('pointerdown', () => {
+        if (this.onInteractionStart) {
+          try { this.onInteractionStart(); } catch { /* ignore */ }
+        }
+        const onUp = () => {
+          if (this.onInteractionEnd) {
+            try { this.onInteractionEnd(); } catch { /* ignore */ }
+          }
+        };
+        window.addEventListener('pointerup', onUp, { once: true });
+        window.addEventListener('pointercancel', onUp, { once: true });
+      });
     }
 
     if (valueInput instanceof HTMLInputElement) {
