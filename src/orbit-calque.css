@@ -307,11 +307,22 @@
   box-sizing: border-box;
 }
 
+/* Compound selector (specificity 0,2,0) so it beats Google Fonts'
+   `.material-symbols-outlined { font-size: 24px }` rule (0,1,0) which
+   loads from the CDN AFTER our stylesheet and would otherwise win the
+   tie. The top-toolbar icons (Center / Random / Zoom / Library /
+   Trash / Presets) survive for the same reason — their selectors are
+   already compound. */
+.orbit-ui-overlay-portamento-icon.material-symbols-outlined,
 .orbit-ui-overlay-portamento-icon {
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1;
   font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
   color: #b9ccdf;
+  /* Non-interactive labels — disable text-cursor on hover and prevent
+     accidental selection of the underlying glyph name. */
+  cursor: default;
+  user-select: none;
 }
 
 /* Slot wraps a slider + its value label so the two stay together
@@ -330,6 +341,10 @@
   -webkit-appearance: none;
   appearance: none;
   height: 4px;
+  /* Padding / border explicit to 0 so a host's generic
+     `input { padding: …; border: … }` rule cannot bleed through. */
+  padding: 0;
+  border: 0;
   border-radius: 2px;
   background: #263242;
   outline: none;
@@ -397,16 +412,27 @@
   }
 }
 
+/* Mirror the `.orbit-center-btn` / `.orbit-random-btn` pill so the
+   loop play/stop button reads as part of the same toolbar family. */
 .orbit-ui-overlay-loop-btn {
   border: 1px solid #3a4a5f;
   background: #1a2230;
   color: #d7dde7;
   font: inherit;
-  font-size: 0.7rem;
+  font-size: 0.6rem;
   line-height: 1;
-  padding: 4px 9px;
+  padding: 4px 10px;
   border-radius: 999px;
   cursor: pointer;
+}
+
+/* Compound selector (specificity 0,2,0) so we beat Google Fonts'
+   `.material-symbols-outlined { font-size: 24px }` rule (0,1,0).
+   The button itself carries the Material class — its sole content is
+   the play / stop glyph. */
+.orbit-ui-overlay-loop-btn.material-symbols-outlined {
+  font-size: 13px;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
 }
 
 .orbit-ui-overlay-loop-btn:hover:not(:disabled) {

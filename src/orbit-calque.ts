@@ -232,9 +232,9 @@ export class OrbitCalque {
     this.overlay.appendChild(this.nameInput);
 
     // Bottom bar layout: |i1| s1 |i2| s2 |i3|
-    //   i1 = → (Tp icon),       s1 = Tp slider + value,
+    //   i1 = moving (Tp icon),  s1 = Tp slider + value,
     //   i2 = ▶/■ (play/stop),   s2 = BPM slider + value,
-    //   i3 = ↻ (BPM icon).
+    //   i3 = cycle (BPM icon).
     // Sliders share the available horizontal space evenly via flex:1
     // on each slot. At narrow width the value labels collapse and the
     // sliders take the full slot; the value reappears as a tooltip
@@ -245,7 +245,7 @@ export class OrbitCalque {
     // i1 — portamento icon
     const ptIcon = document.createElement('span');
     ptIcon.className = 'orbit-ui-overlay-portamento-icon material-symbols-outlined';
-    ptIcon.textContent = 'arrow_forward';
+    ptIcon.textContent = 'moving';
     ptIcon.title = 'Portamento (Tp)';
     this.portamentoBar.appendChild(ptIcon);
 
@@ -278,8 +278,8 @@ export class OrbitCalque {
     // i2 — play/stop button
     this.loopButton = document.createElement('button');
     this.loopButton.type = 'button';
-    this.loopButton.className = 'orbit-ui-overlay-loop-btn';
-    this.loopButton.textContent = '▶';
+    this.loopButton.className = 'orbit-ui-overlay-loop-btn material-symbols-outlined';
+    this.loopButton.textContent = 'play_arrow';
     this.loopButton.title = 'Loop the selection';
     this.loopButton.disabled = true;
     this.loopButton.addEventListener('click', () => {
@@ -317,8 +317,8 @@ export class OrbitCalque {
 
     // i3 — BPM icon
     const loopIcon = document.createElement('span');
-    loopIcon.className = 'orbit-ui-overlay-portamento-icon orbit-loop-icon';
-    loopIcon.textContent = '↻';
+    loopIcon.className = 'orbit-ui-overlay-portamento-icon orbit-loop-icon material-symbols-outlined';
+    loopIcon.textContent = 'cycle';
     loopIcon.title = 'Loop tempo (1 cycle = 1 bar at 4/4)';
     this.portamentoBar.appendChild(loopIcon);
 
@@ -1249,7 +1249,7 @@ export class OrbitCalque {
       to: firstHash,
       startedAt: performance.now(),
     };
-    this.loopButton.textContent = '■';
+    this.loopButton.textContent = 'stop';
     this.loopButton.title = 'Stop loop';
     this.scheduleRafTick();
   }
@@ -1257,7 +1257,7 @@ export class OrbitCalque {
   private stopLoop(): void {
     if (this.loop.kind === 'inactive') return;
     this.loop = { kind: 'inactive' };
-    this.loopButton.textContent = '▶';
+    this.loopButton.textContent = 'play_arrow';
     this.loopButton.title = 'Loop the selection';
   }
 

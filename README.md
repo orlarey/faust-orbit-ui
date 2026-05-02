@@ -69,7 +69,7 @@ The demo wires `OrbitUI` against the legacy `ui.json` and surfaces every emitted
 </script>
 ```
 
-The Material Symbols Outlined font is required for the toolbar icons (`label`, `casino`, `zoom_in`, `bubble_chart`, `delete`, `my_location`, `arrow_forward`).
+The Material Symbols Outlined font is required for the toolbar icons (`label`, `casino`, `zoom_in`, `bubble_chart`, `delete`, `my_location`, `moving`, `cycle`).
 
 ## Feature surface (`OrbitUI`)
 
