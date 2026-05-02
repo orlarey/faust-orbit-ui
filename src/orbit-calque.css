@@ -1,0 +1,419 @@
+/* Library toggle button injected into the orbit-ui header. Icon-only,
+   styled to blend with .orbit-center-btn / .orbit-random-btn. Pinned
+   to the geometric centre of .orbit-header so it stays put regardless
+   of the side groups' widths. */
+.orbit-library-btn {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border: 1px solid #3a4a5f;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: #1a2230;
+  color: #d7dde7;
+  font: inherit;
+  font-size: 0.6rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.orbit-library-btn .material-symbols-outlined {
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: middle;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
+}
+
+/* Re-assert the centering transform on every state of the button so a
+   host's generic `button:hover { transform: ... }` (e.g. webdaw's
+   "lift on hover" effect) cannot win the cascade and yank the button
+   off-centre. The transform here is identical to the base rule. */
+.orbit-library-btn:hover,
+.orbit-library-btn:focus,
+.orbit-library-btn:active,
+.orbit-library-btn[aria-pressed='true'] {
+  transform: translate(-50%, -50%);
+}
+
+.orbit-library-btn:hover {
+  background: #25324a;
+}
+
+.orbit-library-btn[aria-pressed='true'] {
+  background: #2b4d6e;
+  color: #eaf2fb;
+  border-color: #4a7298;
+}
+
+/* Niveau-1 calque overlay rendered above the FaustOrbitUI canvas. */
+.orbit-ui-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.orbit-ui-overlay-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.orbit-ui-overlay:focus {
+  outline: none;
+}
+
+.orbit-ui-overlay.orbit-ui-overlay-active {
+  outline: 1px solid rgba(122, 215, 255, 0.25);
+  outline-offset: -1px;
+}
+
+/* Trash button injected into the orbit-ui toolbar. Same pill styling
+   as Center / Library / Random group so the toolbar reads
+   consistently. Hidden when the selection is empty so the layout
+   reads cleanly when there's nothing to delete. */
+.orbit-trash-btn {
+  border: 1px solid #3a4a5f;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: #1a2230;
+  color: #d7dde7;
+  font: inherit;
+  font-size: 0.6rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.orbit-trash-btn[hidden] {
+  display: none !important;
+}
+
+.orbit-trash-btn .material-symbols-outlined {
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: middle;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
+}
+
+.orbit-trash-btn:hover {
+  background: rgba(60, 30, 30, 0.85);
+  color: #ffd0d0;
+}
+
+/* Preset badge — pill-shaped group mirroring the Random / Zoom groups:
+   `[label-icon] | [display]` with a vertical divider. The display
+   shows the active preset's name when the current params match a
+   named preset, otherwise the count (or `K/N` when there's a
+   selection). A transparent <select> overlays the whole group as the
+   state holder. */
+.orbit-presets-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #3a4a5f;
+  border-radius: 999px;
+  background: #1a2230;
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+}
+
+.orbit-presets-group:hover {
+  background: #25324a;
+}
+
+.orbit-presets-icon {
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 0.6rem;
+  line-height: 1;
+  color: #d7dde7;
+  pointer-events: none;
+}
+
+.orbit-presets-icon.material-symbols-outlined {
+  font-size: 13px;
+  vertical-align: middle;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
+}
+
+.orbit-presets-display {
+  border-left: 1px solid #3a4a5f;
+  padding: 4px 10px;
+  min-width: 30px;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.6rem;
+  line-height: 1;
+  color: #d7dde7;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Unified custom dropdown — used by Random, Zoom, and the Presets
+   menu (replacing the native <select> popups so we can theme them).
+   Anchored under the trigger via JS, sits in document.body. */
+.orbit-dropdown-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 100px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid #3a4a5f;
+  border-radius: 6px;
+  background: #141b25;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+  font: inherit;
+  font-size: 0.6rem;
+  line-height: 1;
+  color: #d7dde7;
+}
+
+.orbit-dropdown-menu-item {
+  display: block;
+  width: 100%;
+  /* Reserve space for the active ✓ in the gutter so all items align. */
+  padding: 5px 8px 5px 20px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+  white-space: nowrap;
+}
+
+.orbit-dropdown-menu-item:hover:not(:disabled) {
+  background: rgba(232, 201, 122, 0.18);
+  color: rgb(255, 230, 170);
+}
+
+.orbit-dropdown-menu-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.orbit-dropdown-menu-item--active {
+  color: rgb(255, 230, 170);
+}
+
+.orbit-dropdown-menu-item--active::before {
+  content: "✓";
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: rgb(232, 201, 122);
+  font-weight: 600;
+}
+
+.orbit-dropdown-menu-separator {
+  height: 1px;
+  margin: 4px 4px;
+  background: #2e3642;
+}
+
+.orbit-presets-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  /* Match the typography of the other native selects (.orbit-zoom,
+     .orbit-random-mix) so the OS dropdown renders options at the same
+     size as theirs. `font: inherit` alone wasn't enough on every browser
+     — the shorthand can clobber font-size. Set it explicitly. */
+  font: inherit;
+  font-size: 0.6rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+
+/* Style the dropdown options to match the toolbar background. Chromium
+   honors these on <option>; Safari ignores them and falls back to the
+   system style — there's no portable CSS to fully restyle a native
+   <select> popup. */
+.orbit-presets-select option {
+  background-color: #141B25;
+  color: #d7dde7;
+}
+
+.orbit-presets-select option:disabled {
+  color: #5a6678;
+}
+
+.orbit-ui-overlay-name-input {
+  position: absolute;
+  z-index: 2;
+  border: 1px solid rgba(232, 197, 98, 0.7);
+  border-radius: 4px;
+  padding: 3px 6px;
+  background: rgba(20, 27, 37, 0.95);
+  color: #f4e8c8;
+  font-size: 12px;
+  line-height: 1.2;
+  outline: none;
+}
+
+.orbit-ui-overlay-name-input::placeholder {
+  color: rgba(244, 232, 200, 0.45);
+}
+
+.orbit-ui-overlay-name-input:focus {
+  border-color: #e8c562;
+  box-shadow: 0 0 0 2px rgba(232, 197, 98, 0.25);
+}
+
+/* Portamento bar — overlays the orbit-ui's own detail bar (the bottom
+   slider area) while the calque is open. Anchored to the bottom of
+   .orbit-wrap so FaustOrbitUI's innerHTML resets on .orbit-detail (when
+   a parameter is selected for detail editing) don't wipe it. Same 48 px
+   height as the detail row beneath. Opaque backdrop hides the host's
+   detail content while shown. */
+.orbit-ui-overlay-portamento {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  background: rgba(20, 27, 37, 0.96);
+  border-top: 1px solid #263242;
+  z-index: 4;
+  color: #d7dde7;
+  font: inherit;
+  font-size: 0.6rem;
+  line-height: 1;
+  box-sizing: border-box;
+}
+
+.orbit-ui-overlay-portamento-icon {
+  font-size: 14px;
+  line-height: 1;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
+  color: #b9ccdf;
+}
+
+/* Slot wraps a slider + its value label so the two stay together
+   inside one flex item. Each slot gets flex:1, so s1 and s2 always
+   share the available space evenly. */
+.orbit-ui-overlay-slot {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.orbit-ui-overlay-portamento input[type='range'] {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: #263242;
+  outline: none;
+  cursor: pointer;
+  margin: 0;
+}
+
+.orbit-ui-overlay-portamento input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #d7dde7;
+  border: 2px solid #0d1016;
+  cursor: pointer;
+}
+
+.orbit-ui-overlay-portamento input[type='range']::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #d7dde7;
+  border: 2px solid #0d1016;
+  cursor: pointer;
+}
+
+.orbit-ui-overlay-portamento-value {
+  min-width: 56px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #b9ccdf;
+  white-space: nowrap;
+}
+
+/* Each slider keeps a usable minimum so it never collapses to nothing. */
+.orbit-ui-overlay-portamento input[type='range'] {
+  min-width: 40px;
+}
+
+/* Tier 1: shed the inline value labels — the slider thumbs already
+   encode the value. Reveal them again while the user is dragging or
+   has focused the matching slider (`is-active` driven by JS), as a
+   small bubble centred above the thumb so it doesn't need horizontal
+   room. With the labels gone, the sliders' flex:1 takes over the slot
+   and they grow to fill it. */
+@container orbit-detail (max-width: 480px) {
+  .orbit-ui-overlay-portamento-value {
+    display: none;
+  }
+  .orbit-ui-overlay-portamento-value.is-active {
+    display: inline-block;
+    position: absolute;
+    top: 0;
+    /* `left` is set inline by JS to follow the thumb. */
+    transform: translateX(-50%);
+    min-width: 0;
+    padding: 1px 6px;
+    border: 1px solid rgba(122, 215, 255, 0.45);
+    border-radius: 4px;
+    background: rgba(20, 27, 37, 0.96);
+    color: #eaf2fb;
+    pointer-events: none;
+    z-index: 5;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  }
+}
+
+.orbit-ui-overlay-loop-btn {
+  border: 1px solid #3a4a5f;
+  background: #1a2230;
+  color: #d7dde7;
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 4px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.orbit-ui-overlay-loop-btn:hover:not(:disabled) {
+  background: #25324a;
+}
+
+.orbit-ui-overlay-loop-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

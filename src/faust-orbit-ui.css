@@ -3,24 +3,33 @@
   grid-template-rows: auto 1fr auto;
   height: 100%;
   background: #0d1016;
+  /* Positioning context for the calque's portamento bar (which is
+     appended here so FaustOrbitUI's innerHTML reset on .orbit-detail
+     doesn't wipe it) AND container-query host so the bar's responsive
+     layout can match `@container orbit-detail (max-width: …)`. */
+  position: relative;
+  container-type: inline-size;
+  container-name: orbit-detail;
 }
 
 .orbit-header {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
+  position: relative;
+  display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px;
+  padding: 6px 10px;
   border-bottom: 1px solid #263242;
   background: #141b25;
+  /* Container query host so the toolbar can collapse to icon-only at
+     narrow widths regardless of viewport size. */
+  container-type: inline-size;
+  container-name: orbit-header;
 }
 
-.orbit-title {
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-size: 12px;
-  color: #b9ccdf;
+/* Push the zoom group to the right edge so the toolbar reads as
+   `[host-injected presets actions] [center / random] ... [zoom]`. */
+.orbit-zoom-wrap {
+  margin-left: auto;
 }
 
 .orbit-middle-actions,
@@ -34,14 +43,16 @@
 .orbit-zoom-group {
   display: inline-flex;
   align-items: center;
+  position: relative;
   border: 1px solid #3a4a5f;
   border-radius: 999px;
   overflow: hidden;
 }
 
 .orbit-zoom-label {
-  padding: 6px 10px;
-  font-size: 13px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 0.6rem;
   color: #d7dde7;
 }
 
@@ -52,26 +63,66 @@
   border: 1px solid #3a4a5f;
   background: #1a2230;
   color: #d7dde7;
-  font-size: 13px;
+  font: inherit;
+  font-size: 0.6rem;
   line-height: 1;
 }
 
 .orbit-center-btn,
 .orbit-random-btn {
   border-radius: 999px;
-  padding: 7px 12px;
+  padding: 4px 10px;
 }
 
 .orbit-random-mix,
 .orbit-zoom {
   border: 0;
   border-left: 1px solid #3a4a5f;
-  padding: 6px 10px;
+  padding: 4px 8px;
 }
 
 .orbit-random-btn {
   border: 0;
-  padding: 7px 12px;
+  padding: 4px 10px;
+}
+
+/* Material Symbols icons inline inside the orbit toolbar buttons / label.
+   Sized slightly larger than the surrounding 0.6rem text so the glyph
+   shape stays readable. The font itself must be loaded by the host page
+   (e.g. Google Fonts: Material Symbols Outlined). */
+.orbit-center-btn .material-symbols-outlined,
+.orbit-random-btn .material-symbols-outlined,
+.orbit-zoom-label.material-symbols-outlined {
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: middle;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
+}
+
+/* Narrow toolbar tier: collapse Random and Zoom to icon-only. The
+   selects stay in DOM (so showPicker() can still target them) but lose
+   their visible track and pointer hits. The icons are wrapped in a
+   click+long-press handler at the OrbitUI level: short tap = action,
+   long press = native picker. The group's pill border stays so the
+   icon still reads as a pill control, consistent with the other
+   toolbar items. */
+@container orbit-header (max-width: 480px) {
+  .orbit-random-mix,
+  .orbit-zoom {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .orbit-random-btn,
+  .orbit-zoom-label {
+    cursor: pointer;
+  }
 }
 
 .orbit-body {
@@ -98,7 +149,16 @@
   border-top: 1px solid #263242;
   background: #141b25;
   overflow: hidden;
+  /* Container query host — the calque's portamento bar adapts its
+     layout to the detail bar's actual width (regardless of viewport).
+     The bar itself is now a sibling of .orbit-detail (under .orbit-wrap),
+     so the container-name has to live on .orbit-wrap as well. We keep
+     it here too in case future rules want to query the detail row's
+     own width. */
+  container-type: inline-size;
+  container-name: orbit-detail;
 }
+
 
 .orbit-detail-empty {
   grid-column: 1 / -1;
