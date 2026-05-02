@@ -26,6 +26,7 @@ import { ParamUndoScope } from './orbit-param-undo.js';
 import { computeConfigHashSync } from './orbit-hash.js';
 import { enableCustomDropdown, openDropdownMenu, type DropdownItem } from './orbit-dropdown.js';
 import type {
+  LoopSettings,
   Preset,
   SelectionEntry,
   TrajectoryEvent,
@@ -71,7 +72,18 @@ export type OrbitUIOptions = {
    *  or whatever key it uses). NOT emitted in response to
    *  `setTrajectory` — sync-in only. */
   onTrajectoryChange?: (record: TrajectoryRecord) => void;
+
+  /** Emitted when the user drags the bottom-bar Tp or BPM slider.
+   *  NOT emitted in response to `setLoopSettings` — sync-in only. */
+  onLoopSettingsChange?: (settings: LoopSettings) => void;
 };
+
+/** Helper: build a 60_000·4/BPM cycle from the bottom-bar's stored
+ *  cycleMs. The conversion lives outside the calque to keep that
+ *  module focused on its own internals. */
+function cycleMsToBpmExt(cycleMs: number): number {
+  return 60_000 * 4 / Math.max(1, cycleMs);
+}
 
 export class OrbitUI {
   /** Identity of the Faust UI signature, computed at construction time. */
@@ -83,6 +95,7 @@ export class OrbitUI {
   private readonly onSelectionChangeUser: ((entries: SelectionEntry[]) => void) | null;
   private readonly onCommitUser: ((cfg: Readonly<Record<string, number>>) => void) | null;
   private readonly onTrajectoryChangeUser: ((record: TrajectoryRecord) => void) | null;
+  private readonly onLoopSettingsChangeUser: ((settings: LoopSettings) => void) | null;
   private readonly paramSpecs: ReadonlyArray<ParamSpec>;
   private readonly userOnParamChange: (path: string, value: number) => void;
   private readonly calque: OrbitCalque;
@@ -126,6 +139,7 @@ export class OrbitUI {
     this.onSelectionChangeUser = options.onSelectionChange ?? null;
     this.onCommitUser = options.onCommit ?? null;
     this.onTrajectoryChangeUser = options.onTrajectoryChange ?? null;
+    this.onLoopSettingsChangeUser = options.onLoopSettingsChange ?? null;
     this.userOnParamChange = options.onParamChange;
     this.library = new Map();
     this.selection = [];
@@ -196,6 +210,7 @@ export class OrbitUI {
       onPresetRename: (hash, name) => this.handlePresetRename(hash, name),
       onCreatePresetAt: (projPos) => this.handleCreatePresetAt(projPos),
       onPresetDelete: (configHash) => this.handleDeleteSinglePreset(configHash),
+      onLoopSettingsChange: (loopMs, portamentoMs) => this.emitLoopSettingsChange(loopMs, portamentoMs),
       onInteractionStart: wrappedStart,
       onInteractionEnd: wrappedEnd,
     });
@@ -338,6 +353,27 @@ export class OrbitUI {
       headIndex: head,
       cursorIndex: cursor,
       updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : Date.now(),
+    };
+  }
+
+  /** Push loop settings from outside (host sync, OrbitUI replay).
+   *  Updates the bottom-bar slider positions. Does NOT emit
+   *  onLoopSettingsChange. */
+  setLoopSettings(settings: LoopSettings): void {
+    if (!settings || typeof settings !== 'object') return;
+    const bpm = Number(settings.bpm);
+    const tp = Number(settings.transitionTimeMs);
+    const loopMs = Number.isFinite(bpm) && bpm > 0
+      ? 60_000 * 4 / bpm
+      : NaN;
+    this.calque.setLoopSettings(loopMs, tp);
+  }
+
+  getLoopSettings(): LoopSettings {
+    return {
+      bpm: cycleMsToBpmExt(this.calque.getLoopMs()),
+      transitionTimeMs: this.calque.getPortamentoMs(),
+      transitionLevel: 1,
     };
   }
 
@@ -512,6 +548,15 @@ export class OrbitUI {
    * Records a `delete` op on the library undo stack, drops the entry
    * from the live selection if present, and emits onLibraryChange.
    */
+  private emitLoopSettingsChange(loopMs: number, portamentoMs: number): void {
+    if (!this.onLoopSettingsChangeUser) return;
+    this.onLoopSettingsChangeUser({
+      bpm: cycleMsToBpmExt(loopMs),
+      transitionTimeMs: portamentoMs,
+      transitionLevel: 1,
+    });
+  }
+
   private handleDeleteSinglePreset(configHash: string): void {
     const record = this.library.get(configHash);
     if (!record) return;

@@ -50,6 +50,9 @@ async function main() {
     onTrajectoryChange: (record) => {
       log('trajectory', `events=${record.events.length} head=${record.headIndex}`);
     },
+    onLoopSettingsChange: (s) => {
+      log('loop', `bpm=${s.bpm.toFixed(0)} tp=${s.transitionTimeMs.toFixed(0)}ms`);
+    },
   });
 
   log('library', `uiHash=${orbit.uiHash.slice(0, 12)}…`);

@@ -127,3 +127,4 @@ body {
 .event .tag-param    { background: #3a4f3a; color: #d6f0d6; }
 .event .tag-commit     { background: #6c4a3b; color: #fbe4ec; }
 .event .tag-trajectory { background: #3a4a5f; color: #cfe1f7; }
+.event .tag-loop       { background: #4a3b2b; color: #fbeacb; }

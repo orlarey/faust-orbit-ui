@@ -96,6 +96,10 @@ export type OrbitCalqueOptions = {
    *  delete op for library undo) and pushes the result back via
    *  setLibrary. */
   onPresetDelete?: (configHash: string) => void;
+  /** Emitted when the user drags either bottom-bar slider (Tp or BPM).
+   *  The values are the new cycle and portamento durations in ms.
+   *  NOT emitted in response to `setLoopSettings`. */
+  onLoopSettingsChange?: (loopMs: number, portamentoMs: number) => void;
   /** Optional gesture bracketing for host autosave / undo. */
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
@@ -123,6 +127,7 @@ export class OrbitCalque {
   private readonly onPresetRenameCb: ((configHash: string, name: string) => void) | null;
   private readonly onCreatePresetAtCb: ((projPos: readonly [number, number]) => void) | null;
   private readonly onPresetDeleteCb: ((configHash: string) => void) | null;
+  private readonly onLoopSettingsChangeCb: ((loopMs: number, portamentoMs: number) => void) | null;
   private readonly onInteractionStart: (() => void) | null;
   private readonly onInteractionEnd: (() => void) | null;
   private readonly resizeObs: ResizeObserver;
@@ -193,6 +198,7 @@ export class OrbitCalque {
     this.onPresetRenameCb = opts.onPresetRename ?? null;
     this.onCreatePresetAtCb = opts.onCreatePresetAt ?? null;
     this.onPresetDeleteCb = opts.onPresetDelete ?? null;
+    this.onLoopSettingsChangeCb = opts.onLoopSettingsChange ?? null;
     this.onInteractionStart = opts.onInteractionStart ?? null;
     this.onInteractionEnd = opts.onInteractionEnd ?? null;
 
@@ -265,6 +271,7 @@ export class OrbitCalque {
       if (!Number.isFinite(s)) return;
       this.portamentoMs = logSliderToValue(s, PORTAMENTO_MIN_MS, PORTAMENTO_MAX_MS);
       this.portamentoLabel.textContent = formatMs(this.portamentoMs);
+      this.emitLoopSettingsChange();
     });
     bindActiveValueLabel(this.portamentoSlider, this.portamentoLabel, this.portamentoBar);
 
@@ -304,6 +311,7 @@ export class OrbitCalque {
       const bpm = logSliderToValue(s, LOOP_MIN_BPM, LOOP_MAX_BPM);
       this.loopMs = bpmToCycleMs(bpm);
       this.loopLabel.textContent = `${Math.round(bpm)} BPM`;
+      this.emitLoopSettingsChange();
     });
     bindActiveValueLabel(this.loopSlider, this.loopLabel, this.portamentoBar);
 
@@ -380,6 +388,32 @@ export class OrbitCalque {
     this.updateLoopButtonEnabled();
     if (this.visible) this.scheduleRender();
     this.applyLoopSwap();
+  }
+
+  /** Push loop settings from outside (host sync, OrbitUI replay).
+   *  Updates the bottom-bar slider positions. Does NOT emit
+   *  onLoopSettingsChange. */
+  setLoopSettings(loopMs: number, portamentoMs: number): void {
+    if (Number.isFinite(loopMs) && loopMs > 0) {
+      this.loopMs = loopMs;
+      const bpm = cycleMsToBpm(loopMs);
+      this.loopSlider.value = String(valueToLogSlider(bpm, LOOP_MIN_BPM, LOOP_MAX_BPM));
+      this.loopLabel.textContent = `${Math.round(bpm)} BPM`;
+    }
+    if (Number.isFinite(portamentoMs) && portamentoMs >= 0) {
+      this.portamentoMs = portamentoMs;
+      this.portamentoSlider.value = String(
+        valueToLogSlider(portamentoMs, PORTAMENTO_MIN_MS, PORTAMENTO_MAX_MS),
+      );
+      this.portamentoLabel.textContent = formatMs(portamentoMs);
+    }
+  }
+
+  getLoopMs(): number { return this.loopMs; }
+  getPortamentoMs(): number { return this.portamentoMs; }
+
+  private emitLoopSettingsChange(): void {
+    this.onLoopSettingsChangeCb?.(this.loopMs, this.portamentoMs);
   }
 
   isVisible(): boolean { return this.visible; }
