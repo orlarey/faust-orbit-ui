@@ -1,6 +1,6 @@
 # faust-orbit-ui
 
-![faust-orbit-ui screenshot](images/faust-orbit-ui.png)
+![faust-orbit-ui screenshot](https://raw.githubusercontent.com/orlarey/faust-orbit-ui/main/images/faust-orbit-ui.png)
 
 Orbit-based UI component for Faust-style parameter control with a built-in preset library, projection / Shepard navigation overlay, dwell-based auto-promotion, looped playback, undo/redo, and a recall menu — all driven by JSON metadata and callbacks. No DSP / audio engine inside.
 
