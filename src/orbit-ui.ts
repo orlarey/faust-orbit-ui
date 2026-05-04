@@ -25,6 +25,7 @@ import { LibraryUndoScope, type LibraryOp } from './orbit-library-undo.js';
 import { ParamUndoScope } from './orbit-param-undo.js';
 import { computeConfigHashSync } from './orbit-hash.js';
 import { enableCustomDropdown, openDropdownMenu, type DropdownItem } from './orbit-dropdown.js';
+import { ORBIT_UI_STYLES } from './orbit-ui-styles.js';
 import type {
   LoopSettings,
   Preset,
@@ -76,6 +77,25 @@ export type OrbitUIOptions = {
   /** Emitted when the user drags the bottom-bar Tp or BPM slider.
    *  NOT emitted in response to `setLoopSettings` — sync-in only. */
   onLoopSettingsChange?: (settings: LoopSettings) => void;
+
+  /** Forwarded to the inner FaustOrbitUI : tooltip strings displayed on
+   *  the toolbar buttons (Center / Random / Zoom / hints). Hosts that
+   *  localise their UI use this to inject translated tooltips. */
+  tooltips?: {
+    centerButton?: string;
+    randomButton?: string;
+    randomMix?: string;
+    zoomSelect?: string;
+    hintSlider?: string;
+    hintCenter?: string;
+    hintOuter?: string;
+  };
+
+  /** Forwarded to the inner FaustOrbitUI : fires whenever the renderer's
+   *  visual state mutates (param positions, zoom, centre move). Hosts
+   *  that persist orbit state across sessions or sync it to a remote
+   *  observe this to capture snapshots. */
+  onOrbitStateChange?: (state: ReturnType<FaustOrbitUI['getOrbitState']>) => void;
 };
 
 /** Helper: build a 60_000·4/BPM cycle from the bottom-bar's stored
@@ -90,7 +110,19 @@ export class OrbitUI {
   readonly uiHash: string;
 
   private readonly inner: FaustOrbitUI;
+  /** The host element passed by the caller. Public surface for routing
+   *  decisions (Cmd+Z scoping, focus checks) — carries the
+   *  `.orbit-ui-root` class. */
   private readonly container: HTMLElement;
+  /** Shadow root attached to `container`. All component DOM lives
+   *  inside this root, isolated from the host's stylesheet. Public CSS
+   *  custom properties are exposed via `:host` rules on this root. */
+  private readonly shadow: ShadowRoot;
+  /** Inner host `<div>` inside the shadow root. This is what we pass
+   *  to FaustOrbitUI as its `root`, and the target of every
+   *  `appendChild` / `querySelector` the wrapper does for its own
+   *  toolbar additions (presets pill, trash, library button, calque). */
+  private readonly shadowContainer: HTMLDivElement;
   private readonly onLibraryChange: ((records: Preset[]) => void) | null;
   private readonly onSelectionChangeUser: ((entries: SelectionEntry[]) => void) | null;
   private readonly onCommitUser: ((cfg: Readonly<Record<string, number>>) => void) | null;
@@ -133,6 +165,22 @@ export class OrbitUI {
 
     this.container = container;
     this.container.classList.add('orbit-ui-root');
+
+    // Attach a shadow root so all component DOM and CSS lives in an
+    // isolated sub-tree. The host's stylesheet does not bleed in (only
+    // inheritable properties like font-family, which is what we want
+    // for things like the Material Symbols font). The component's CSS
+    // does not bleed out. Hosts customise look-and-feel via the CSS
+    // custom properties declared at `:host` scope inside the inlined
+    // stylesheet (see src/faust-orbit-ui.css §`:host { … }`).
+    this.shadow = container.shadowRoot ?? container.attachShadow({ mode: 'open' });
+    const styleEl = document.createElement('style');
+    styleEl.textContent = ORBIT_UI_STYLES;
+    this.shadow.appendChild(styleEl);
+    this.shadowContainer = document.createElement('div');
+    this.shadowContainer.className = 'orbit-shadow-host';
+    this.shadow.appendChild(this.shadowContainer);
+
     this.uiHash = computeUIHashSync(options.uiDescriptor);
     this.paramSpecs = extractParamSpecs(options.uiDescriptor);
     this.onLibraryChange = options.onLibraryChange ?? null;
@@ -192,16 +240,18 @@ export class OrbitUI {
       // guard the call.
       if (this.presetsCountLabel) this.updatePresetsBadge();
     };
-    this.inner = new FaustOrbitUI(container, wrappedParamChange, {
+    this.inner = new FaustOrbitUI(this.shadowContainer, wrappedParamChange, {
       onInteractionStart: wrappedStart,
       onInteractionEnd: wrappedEnd,
+      ...(options.tooltips ? { tooltips: options.tooltips } : {}),
+      ...(options.onOrbitStateChange ? { onOrbitStateChange: options.onOrbitStateChange } : {}),
     });
 
     const initialState = this.inner.buildControlsFromUnknown(options.uiDescriptor);
     this.inner.setOrbitState(initialState);
 
     this.calque = new OrbitCalque({
-      container,
+      container: this.shadowContainer,
       paramSpecs: this.paramSpecs,
       getCurrentParams: () => this.inner.getParamValues(),
       onApply: (cfg) => this.applyConfigFromCalque(cfg),
@@ -243,11 +293,11 @@ export class OrbitUI {
    * toolbar regardless of the side groups' widths.
    */
   private reorderToolbar(): void {
-    const header = this.container.querySelector<HTMLElement>('.orbit-header');
-    const middle = this.container.querySelector<HTMLElement>('.orbit-middle-actions');
-    const zoomWrap = this.container.querySelector<HTMLElement>('.orbit-zoom-wrap');
-    const centerBtn = this.container.querySelector<HTMLElement>('.orbit-center-btn');
-    const randomGroup = this.container.querySelector<HTMLElement>('.orbit-random-group');
+    const header = this.shadowContainer.querySelector<HTMLElement>('.orbit-header');
+    const middle = this.shadowContainer.querySelector<HTMLElement>('.orbit-middle-actions');
+    const zoomWrap = this.shadowContainer.querySelector<HTMLElement>('.orbit-zoom-wrap');
+    const centerBtn = this.shadowContainer.querySelector<HTMLElement>('.orbit-center-btn');
+    const randomGroup = this.shadowContainer.querySelector<HTMLElement>('.orbit-random-group');
     if (!header || !middle || !zoomWrap) return;
     // Left group: random, presets.
     if (randomGroup) middle.appendChild(randomGroup);
@@ -266,11 +316,11 @@ export class OrbitUI {
    * handlers); we just re-route how the popup is opened.
    */
   private installCustomToolbarDropdowns(): void {
-    const mix = this.container.querySelector<HTMLSelectElement>('.orbit-random-mix');
-    const zoom = this.container.querySelector<HTMLSelectElement>('.orbit-zoom');
-    if (mix) enableCustomDropdown(mix);
-    if (zoom) enableCustomDropdown(zoom);
-    enableCustomDropdown(this.presetsSelect, () => this.buildPresetsDropdownItems());
+    const mix = this.shadowContainer.querySelector<HTMLSelectElement>('.orbit-random-mix');
+    const zoom = this.shadowContainer.querySelector<HTMLSelectElement>('.orbit-zoom');
+    if (mix) enableCustomDropdown(mix, undefined, this.shadow);
+    if (zoom) enableCustomDropdown(zoom, undefined, this.shadow);
+    enableCustomDropdown(this.presetsSelect, () => this.buildPresetsDropdownItems(), this.shadow);
   }
 
   /** Build the preset dropdown items (mirrors rebuildPresetSelectOptions
@@ -422,6 +472,60 @@ export class OrbitUI {
     this.tracker.setSuspended(suspended);
   }
 
+  // -------------------------------------------------------------------------
+  // Delegators to the inner FaustOrbitUI for hosts that need access to the
+  // bare-renderer surface (param-position layout, zoom, batched updates,
+  // body element measurements). These are kept narrow on purpose — anything
+  // that touches the wrapper-owned state (library, selection, trajectory)
+  // goes through the dedicated wrapper methods above.
+  // -------------------------------------------------------------------------
+
+  /** Re-measure the host container and re-render the canvas. The wrapper
+   *  installs an internal ResizeObserver, but hosts may still call this
+   *  explicitly after a manual layout change. */
+  resize(): void {
+    this.inner.resize();
+  }
+
+  /** Current zoom level as exposed by the toolbar's zoom selector. */
+  getZoom(): number {
+    return this.inner.getZoom();
+  }
+
+  /** Suspend `onStateChange`-style emissions while a batch of mutations
+   *  is in flight. Pair with `endUpdate()`. Inherited from FaustUICore. */
+  beginUpdate(): void {
+    this.inner.beginUpdate();
+  }
+
+  endUpdate(): void {
+    this.inner.endUpdate();
+  }
+
+  /** Build a fresh `OrbitState` from a Faust UI descriptor without
+   *  applying it. Hosts that persist orbit positions across sessions
+   *  use this to seed-then-merge with their saved snapshot before
+   *  calling `setOrbitState`. */
+  buildControlsFromUnknown(input: unknown): ReturnType<FaustOrbitUI['buildControlsFromUnknown']> {
+    return this.inner.buildControlsFromUnknown(input);
+  }
+
+  /** Snapshot of the renderer's full visual state (param positions,
+   *  zoom, etc.) for cross-session persistence or remote sync. */
+  getOrbitState(): ReturnType<FaustOrbitUI['getOrbitState']> {
+    return this.inner.getOrbitState();
+  }
+
+  setOrbitState(state: Parameters<FaustOrbitUI['setOrbitState']>[0]): void {
+    this.inner.setOrbitState(state);
+  }
+
+  /** The inner renderer's body element — the canvas's container, used
+   *  by hosts that need to measure layout-recovery dimensions. */
+  get body(): HTMLDivElement {
+    return this.inner.body;
+  }
+
   undoLibrary(): boolean {
     const op = this.libraryUndo.popUndo();
     if (!op) return false;
@@ -473,6 +577,11 @@ export class OrbitUI {
     this.presetsBadge.remove();
     this.calque.destroy();
     this.inner.destroy();
+    // Clean the shadow root so a subsequent OrbitUI constructed on the
+    // same host reuses an empty shadow instead of stacking duplicate
+    // <style>s and a dangling shadow-host div. attachShadow() can only
+    // be called once per element; the next ctor reads container.shadowRoot.
+    this.shadow.replaceChildren();
     this.container.classList.remove('orbit-ui-root');
     this.library.clear();
     this.selection = [];
@@ -686,7 +795,7 @@ export class OrbitUI {
   }
 
   private injectTrashButton(): HTMLButtonElement {
-    const middle = this.container.querySelector<HTMLElement>('.orbit-middle-actions');
+    const middle = this.shadowContainer.querySelector<HTMLElement>('.orbit-middle-actions');
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'orbit-trash-btn';
@@ -698,7 +807,7 @@ export class OrbitUI {
     button.appendChild(icon);
     button.addEventListener('click', () => this.handleTrashSelected());
     if (middle) middle.appendChild(button);
-    else this.container.appendChild(button);
+    else this.shadowContainer.appendChild(button);
     return button;
   }
 
@@ -720,7 +829,7 @@ export class OrbitUI {
     label: HTMLElement;
     select: HTMLSelectElement;
   } {
-    const middle = this.container.querySelector<HTMLElement>('.orbit-middle-actions');
+    const middle = this.shadowContainer.querySelector<HTMLElement>('.orbit-middle-actions');
     const group = document.createElement('div');
     group.className = 'orbit-presets-group';
 
@@ -750,7 +859,7 @@ export class OrbitUI {
     select.addEventListener('change', () => this.handlePresetSelectChange(select));
 
     if (middle) middle.appendChild(group);
-    else this.container.appendChild(group);
+    else this.shadowContainer.appendChild(group);
     return { wrap: group, label: display, select };
   }
 
@@ -990,7 +1099,7 @@ export class OrbitUI {
   }
 
   private injectLibraryButton(): HTMLButtonElement {
-    const middle = this.container.querySelector<HTMLElement>('.orbit-middle-actions');
+    const middle = this.shadowContainer.querySelector<HTMLElement>('.orbit-middle-actions');
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'orbit-library-btn';
@@ -1008,7 +1117,7 @@ export class OrbitUI {
     if (middle) {
       middle.appendChild(button);
     } else {
-      this.container.appendChild(button);
+      this.shadowContainer.appendChild(button);
     }
     return button;
   }
@@ -1017,6 +1126,14 @@ export class OrbitUI {
     const visible = this.calque.isVisible();
     this.toggleButton.setAttribute('aria-pressed', String(visible));
     this.tracker.setOverlayActive(visible);
+    // Mirror the calque-active state onto the host element itself so
+    // hosts outside the shadow boundary can still detect it via
+    // `container.classList.contains('orbit-ui-overlay-active')`. The
+    // class is also present on the calque overlay element inside the
+    // shadow (set by OrbitCalque) — duplicating it on the host is the
+    // only way a Cmd+Z router living outside can see it, since
+    // `querySelector` does not pierce shadow roots.
+    this.container.classList.toggle('orbit-ui-overlay-active', visible);
   }
 
   /**
@@ -1032,10 +1149,10 @@ export class OrbitUI {
    */
   private installNarrowToolbarHandlers(): void {
     const LONG_PRESS_MS = 400;
-    const randomBtn = this.container.querySelector<HTMLElement>('.orbit-random-btn');
-    const randomMix = this.container.querySelector<HTMLSelectElement>('.orbit-random-mix');
-    const zoomLabel = this.container.querySelector<HTMLElement>('.orbit-zoom-label');
-    const zoomSelect = this.container.querySelector<HTMLSelectElement>('.orbit-zoom');
+    const randomBtn = this.shadowContainer.querySelector<HTMLElement>('.orbit-random-btn');
+    const randomMix = this.shadowContainer.querySelector<HTMLSelectElement>('.orbit-random-mix');
+    const zoomLabel = this.shadowContainer.querySelector<HTMLElement>('.orbit-zoom-label');
+    const zoomSelect = this.shadowContainer.querySelector<HTMLSelectElement>('.orbit-zoom');
 
     const bindLongPress = (
       target: HTMLElement,
@@ -1069,6 +1186,7 @@ export class OrbitUI {
               select.value = value;
               select.dispatchEvent(new Event('change', { bubbles: true }));
             },
+            mountRoot: this.shadow,
           });
         }, LONG_PRESS_MS);
       });

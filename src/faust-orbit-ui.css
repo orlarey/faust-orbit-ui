@@ -1,8 +1,72 @@
+/* ============================================================
+   Public theming surface — CSS custom properties exposed to hosts.
+   Hosts override these on the shadow-host element (the `<div>` they
+   pass to `new OrbitUI(container, …)`). Custom properties pierce the
+   shadow boundary, so a host's `.my-orbit { --orbit-pill-bg: … }`
+   reaches every styled element inside the shadow.
+   ============================================================ */
+/* The shadow host needs an explicit display + size so the chain of
+   `height: 100%` rules below resolves against a definite box, instead
+   of collapsing the orbit to a content-sized strip. Hosts can still
+   override on the outside (e.g. `position: absolute`, fixed pixel
+   sizes) — `:host` has the lowest specificity in the cascade. */
+:host {
+  display: block;
+  width: 100%;
+  height: 100%;
+
+  /* Backgrounds */
+  --orbit-bg: #0d1016;            /* canvas / main body */
+  --orbit-toolbar-bg: #141b25;    /* top toolbar + bottom detail panel */
+  --orbit-toolbar-line: #263242;  /* divider lines, slider track */
+
+  /* Pills (Center / Random / Zoom / Library / Trash / preset value box) */
+  --orbit-pill-bg: #1a2230;
+  --orbit-pill-border: #3a4a5f;
+  --orbit-pill-hover-bg: #25324a;
+
+  /* Foreground / accent */
+  --orbit-fg: #d7dde7;            /* pill text, slider thumb, value labels */
+  --orbit-fg-muted: #b9ccdf;
+  --orbit-accent-bg: #2b4d6e;     /* active / pressed pill */
+  --orbit-accent-fg: #eaf2fb;
+  --orbit-accent-border: #4a7298;
+}
+
+/* Inner shadow-host div: fills the host, so the .orbit-wrap grid below
+   can resolve its `height: 100%` against a definite box. */
+.orbit-shadow-host {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Re-declare the Material Symbols Outlined class-to-font mapping inside
+   the shadow tree. Google Fonts' stylesheet declares this at document
+   level — its rules don't pierce shadow boundaries, even though the
+   `@font-face` itself (loaded by the host page) is globally available. */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined', sans-serif;
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'liga';
+}
+
 .orbit-wrap {
   display: grid;
   grid-template-rows: auto 1fr auto;
   height: 100%;
-  background: #0d1016;
+  background: var(--orbit-bg);
   /* Positioning context for the calque's portamento bar (which is
      appended here so FaustOrbitUI's innerHTML reset on .orbit-detail
      doesn't wipe it) AND container-query host so the bar's responsive
@@ -18,8 +82,8 @@
   align-items: center;
   gap: 10px;
   padding: 6px 10px;
-  border-bottom: 1px solid #263242;
-  background: #141b25;
+  border-bottom: 1px solid var(--orbit-toolbar-line);
+  background: var(--orbit-toolbar-bg);
   /* Container query host so the toolbar can collapse to icon-only at
      narrow widths regardless of viewport size. */
   container-type: inline-size;
@@ -44,25 +108,24 @@
   display: inline-flex;
   align-items: center;
   position: relative;
-  border: 1px solid #3a4a5f;
+  border: 1px solid var(--orbit-pill-border);
   border-radius: 999px;
   overflow: hidden;
 }
 
 .orbit-zoom-label {
   padding: 4px 8px;
-  font: inherit;
   font-size: 0.6rem;
-  color: #d7dde7;
+  color: var(--orbit-fg);
 }
 
 .orbit-center-btn,
 .orbit-random-btn,
 .orbit-random-mix,
 .orbit-zoom {
-  border: 1px solid #3a4a5f;
-  background: #1a2230;
-  color: #d7dde7;
+  border: 1px solid var(--orbit-pill-border);
+  background: var(--orbit-pill-bg);
+  color: var(--orbit-fg);
   font: inherit;
   font-size: 0.6rem;
   line-height: 1;
@@ -77,7 +140,7 @@
 .orbit-random-mix,
 .orbit-zoom {
   border: 0;
-  border-left: 1px solid #3a4a5f;
+  border-left: 1px solid var(--orbit-pill-border);
   padding: 4px 8px;
 }
 
@@ -146,8 +209,8 @@
   gap: 10px;
   height: 48px;
   padding: 0 12px;
-  border-top: 1px solid #263242;
-  background: #141b25;
+  border-top: 1px solid var(--orbit-toolbar-line);
+  background: var(--orbit-toolbar-bg);
   overflow: hidden;
   /* Container query host — the calque's portamento bar adapts its
      layout to the detail bar's actual width (regardless of viewport).
@@ -202,10 +265,10 @@
 .orbit-detail-value {
   width: 72px;
   padding: 3px 6px;
-  border: 1px solid #3a4a5f;
+  border: 1px solid var(--orbit-pill-border);
   border-radius: 4px;
-  background: #1a2230;
-  color: #d7dde7;
+  background: var(--orbit-pill-bg);
+  color: var(--orbit-fg);
   font-size: 12px;
   font-family: inherit;
   text-align: right;
@@ -227,7 +290,7 @@
   padding: 0;
   border: 0;
   border-radius: 2px;
-  background: #263242;
+  background: var(--orbit-toolbar-line);
   outline: none;
   cursor: pointer;
 }
@@ -237,8 +300,8 @@
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #d7dde7;
-  border: 2px solid #0d1016;
+  background: var(--orbit-fg);
+  border: 2px solid var(--orbit-bg);
   cursor: pointer;
 }
 
@@ -246,8 +309,8 @@
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #d7dde7;
-  border: 2px solid #0d1016;
+  background: var(--orbit-fg);
+  border: 2px solid var(--orbit-bg);
   cursor: pointer;
 }
 
@@ -274,10 +337,10 @@
 
 .orbit-detail-btn {
   padding: 5px 16px;
-  border: 1px solid #3a4a5f;
+  border: 1px solid var(--orbit-pill-border);
   border-radius: 4px;
-  background: #1a2230;
-  color: #d7dde7;
+  background: var(--orbit-pill-bg);
+  color: var(--orbit-fg);
   font-size: 12px;
   font-family: inherit;
   cursor: pointer;
@@ -299,10 +362,10 @@
 
 .orbit-detail-select {
   padding: 5px 10px;
-  border: 1px solid #3a4a5f;
+  border: 1px solid var(--orbit-pill-border);
   border-radius: 4px;
-  background: #1a2230;
-  color: #d7dde7;
+  background: var(--orbit-pill-bg);
+  color: var(--orbit-fg);
   font-size: 12px;
   font-family: inherit;
   cursor: pointer;

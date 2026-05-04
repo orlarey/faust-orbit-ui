@@ -194,7 +194,10 @@ export class FaustOrbitUI extends FaustUICore {
   private state: OrbitState; // Internal authoritative Orbit state.
   private activePath: Path | null; // Path of the last-touched control shown in the detail panel.
 
-  private body: HTMLDivElement; // Root scrollable body containing the canvas.
+  /** Root scrollable body containing the canvas. Public so the OrbitUI
+   *  wrapper (and embedding hosts that have a reference to the wrapped
+   *  inner instance) can measure it for layout-recovery routines. */
+  readonly body: HTMLDivElement;
   private canvas: HTMLCanvasElement; // Drawing canvas for Orbit UI.
   private ctx: CanvasRenderingContext2D; // 2D rendering context of the Orbit canvas.
   private detailEl: HTMLDivElement; // Detail panel container below the canvas.

@@ -25,6 +25,10 @@ export type DropdownOptions = {
   position?: { left: number; top: number };
   items: ReadonlyArray<DropdownItem>;
   onPick: (value: string) => void;
+  /** Where to attach the menu element. Defaults to `document.body`.
+   *  Components that render inside a shadow root pass their shadow
+   *  here so the menu inherits the shadow's stylesheet. */
+  mountRoot?: ParentNode;
 };
 
 const MENU_CLASS = 'orbit-dropdown-menu';
@@ -62,7 +66,7 @@ export function openDropdownMenu(opts: DropdownOptions): () => void {
     menu.appendChild(btn);
   }
 
-  document.body.appendChild(menu);
+  (opts.mountRoot ?? document.body).appendChild(menu);
 
   let closed = false;
   const close = (): void => {
@@ -74,11 +78,13 @@ export function openDropdownMenu(opts: DropdownOptions): () => void {
     window.removeEventListener('resize', onScrollOrResize);
     menu.remove();
   };
+  // composedPath walks through shadow boundaries, so the "click outside"
+  // detection works whether the menu lives in document.body or inside a
+  // shadow root mounted on the host page.
   const onDocPointerDown = (e: PointerEvent): void => {
-    const t = e.target as Node | null;
-    if (!t) return;
-    if (menu.contains(t)) return;
-    if (opts.anchor && opts.anchor.contains(t)) return;
+    const path = e.composedPath();
+    if (path.includes(menu)) return;
+    if (opts.anchor && path.includes(opts.anchor)) return;
     close();
   };
   const onKeyDown = (e: KeyboardEvent): void => {
@@ -103,6 +109,7 @@ export function openDropdownMenu(opts: DropdownOptions): () => void {
 export function enableCustomDropdown(
   select: HTMLSelectElement,
   itemsBuilder?: () => ReadonlyArray<DropdownItem>,
+  mountRoot?: ParentNode,
 ): () => void {
   const open = (): void => {
     const items = itemsBuilder ? itemsBuilder() : optionsToItems(select);
@@ -113,6 +120,7 @@ export function enableCustomDropdown(
         select.value = value;
         select.dispatchEvent(new Event('change', { bubbles: true }));
       },
+      ...(mountRoot ? { mountRoot } : {}),
     });
   };
   const onMouseDown = (e: MouseEvent): void => {

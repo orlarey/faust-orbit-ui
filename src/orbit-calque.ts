@@ -1462,6 +1462,10 @@ export class OrbitCalque {
     const idx = this.hitTestPreset(e.clientX, e.clientY);
     if (idx < 0) return;
     const preset = this.library[idx]!;
+    // Mount inside the shadow root if we are hosted there (OrbitUI),
+    // otherwise default to document.body. `getRootNode()` returns the
+    // closest ShadowRoot or Document — both are valid ParentNodes.
+    const root = this.overlay.getRootNode() as ParentNode;
     openDropdownMenu({
       position: { left: e.clientX, top: e.clientY },
       items: [
@@ -1475,6 +1479,7 @@ export class OrbitCalque {
           this.onPresetDeleteCb?.(preset.configHash);
         }
       },
+      mountRoot: root,
     });
   };
 

@@ -7,11 +7,11 @@
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  border: 1px solid #3a4a5f;
+  border: 1px solid var(--orbit-pill-border);
   border-radius: 999px;
   padding: 4px 10px;
-  background: #1a2230;
-  color: #d7dde7;
+  background: var(--orbit-pill-bg);
+  color: var(--orbit-fg);
   font: inherit;
   font-size: 0.6rem;
   line-height: 1;
@@ -39,13 +39,13 @@
 }
 
 .orbit-library-btn:hover {
-  background: #25324a;
+  background: var(--orbit-pill-hover-bg);
 }
 
 .orbit-library-btn[aria-pressed='true'] {
-  background: #2b4d6e;
-  color: #eaf2fb;
-  border-color: #4a7298;
+  background: var(--orbit-accent-bg);
+  color: var(--orbit-accent-fg);
+  border-color: var(--orbit-accent-border);
 }
 
 /* Niveau-1 calque overlay rendered above the FaustOrbitUI canvas. */
@@ -78,11 +78,11 @@
    consistently. Hidden when the selection is empty so the layout
    reads cleanly when there's nothing to delete. */
 .orbit-trash-btn {
-  border: 1px solid #3a4a5f;
+  border: 1px solid var(--orbit-pill-border);
   border-radius: 999px;
   padding: 4px 10px;
-  background: #1a2230;
-  color: #d7dde7;
+  background: var(--orbit-pill-bg);
+  color: var(--orbit-fg);
   font: inherit;
   font-size: 0.6rem;
   line-height: 1;
@@ -117,24 +117,23 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  border: 1px solid #3a4a5f;
+  border: 1px solid var(--orbit-pill-border);
   border-radius: 999px;
-  background: #1a2230;
+  background: var(--orbit-pill-bg);
   overflow: hidden;
   cursor: pointer;
   user-select: none;
 }
 
 .orbit-presets-group:hover {
-  background: #25324a;
+  background: var(--orbit-pill-hover-bg);
 }
 
 .orbit-presets-icon {
   padding: 4px 8px;
-  font: inherit;
   font-size: 0.6rem;
   line-height: 1;
-  color: #d7dde7;
+  color: var(--orbit-fg);
   pointer-events: none;
 }
 
@@ -145,14 +144,14 @@
 }
 
 .orbit-presets-display {
-  border-left: 1px solid #3a4a5f;
+  border-left: 1px solid var(--orbit-pill-border);
   padding: 4px 10px;
   min-width: 30px;
   box-sizing: border-box;
   font: inherit;
   font-size: 0.6rem;
   line-height: 1;
-  color: #d7dde7;
+  color: var(--orbit-fg);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   text-align: center;
@@ -169,14 +168,14 @@
   max-height: 60vh;
   overflow-y: auto;
   padding: 4px;
-  border: 1px solid #3a4a5f;
+  border: 1px solid var(--orbit-pill-border);
   border-radius: 6px;
-  background: #141b25;
+  background: var(--orbit-toolbar-bg);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
   font: inherit;
   font-size: 0.6rem;
   line-height: 1;
-  color: #d7dde7;
+  color: var(--orbit-fg);
 }
 
 .orbit-dropdown-menu-item {
@@ -252,7 +251,7 @@
    <select> popup. */
 .orbit-presets-select option {
   background-color: #141B25;
-  color: #d7dde7;
+  color: var(--orbit-fg);
 }
 
 .orbit-presets-select option:disabled {
@@ -298,9 +297,9 @@
   gap: 10px;
   padding: 0 12px;
   background: rgba(20, 27, 37, 0.96);
-  border-top: 1px solid #263242;
+  border-top: 1px solid var(--orbit-toolbar-line);
   z-index: 4;
-  color: #d7dde7;
+  color: var(--orbit-fg);
   font: inherit;
   font-size: 0.6rem;
   line-height: 1;
@@ -318,7 +317,7 @@
   font-size: 13px;
   line-height: 1;
   font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
-  color: #b9ccdf;
+  color: var(--orbit-fg-muted);
   /* Non-interactive labels — disable text-cursor on hover and prevent
      accidental selection of the underlying glyph name. */
   cursor: default;
@@ -346,7 +345,7 @@
   padding: 0;
   border: 0;
   border-radius: 2px;
-  background: #263242;
+  background: var(--orbit-toolbar-line);
   outline: none;
   cursor: pointer;
   margin: 0;
@@ -357,8 +356,8 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #d7dde7;
-  border: 2px solid #0d1016;
+  background: var(--orbit-fg);
+  border: 2px solid var(--orbit-bg);
   cursor: pointer;
 }
 
@@ -366,8 +365,8 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #d7dde7;
-  border: 2px solid #0d1016;
+  background: var(--orbit-fg);
+  border: 2px solid var(--orbit-bg);
   cursor: pointer;
 }
 
@@ -375,7 +374,7 @@
   min-width: 56px;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  color: #b9ccdf;
+  color: var(--orbit-fg-muted);
   white-space: nowrap;
 }
 
@@ -405,7 +404,7 @@
     border: 1px solid rgba(122, 215, 255, 0.45);
     border-radius: 4px;
     background: rgba(20, 27, 37, 0.96);
-    color: #eaf2fb;
+    color: var(--orbit-accent-fg);
     pointer-events: none;
     z-index: 5;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
@@ -415,10 +414,9 @@
 /* Mirror the `.orbit-center-btn` / `.orbit-random-btn` pill so the
    loop play/stop button reads as part of the same toolbar family. */
 .orbit-ui-overlay-loop-btn {
-  border: 1px solid #3a4a5f;
-  background: #1a2230;
-  color: #d7dde7;
-  font: inherit;
+  border: 1px solid var(--orbit-pill-border);
+  background: var(--orbit-pill-bg);
+  color: var(--orbit-fg);
   font-size: 0.6rem;
   line-height: 1;
   padding: 4px 10px;
@@ -436,7 +434,7 @@
 }
 
 .orbit-ui-overlay-loop-btn:hover:not(:disabled) {
-  background: #25324a;
+  background: var(--orbit-pill-hover-bg);
 }
 
 .orbit-ui-overlay-loop-btn:disabled {
