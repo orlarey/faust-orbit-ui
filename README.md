@@ -8,8 +8,8 @@ Orbit-based UI component for Faust-style parameter control with a built-in prese
 
 The package exposes two classes:
 
-- **`OrbitUI`** — the recommended API. A self-contained component that owns its `uiHash`, a preset library, the level-1 calque overlay (PCA + Shepard), the loop machinery, undo/redo scopes, and the toolbar. The host gets `setLibrary` / `setSelection` / `setTrajectory` / `setLoopSettings` / `setParams` for sync-in, and `onLibraryChange` / `onSelectionChange` / `onTrajectoryChange` / `onLoopSettingsChange` / `onCommit` for sync-out.
-- **`FaustOrbitUI`** — the legacy renderer that draws the parameter dots and detail panel. `OrbitUI` wraps it; you only need it directly if you want the bare orbit view without the library / calque / loop layers.
+- **`OrbitUI`** — the recommended API. A self-contained component that owns its `uiHash`, a preset library, the level-1 calque overlay (PCA + Shepard), the loop machinery, undo/redo scopes, and the toolbar. The host gets `setLibrary` / `setSelection` / `setTrajectory` / `setLoopSettings` / `setParams` for sync-in, and `onLibraryChange` / `onSelectionChange` / `onTrajectoryChange` / `onLoopSettingsChange` / `onCommit` for sync-out. Renders into a **shadow root** attached to the host element (since v0.4.0) — host stylesheets do not bleed in, and the wrapper's stylesheet does not bleed out. Hosts theme via the [CSS custom properties](#theming) declared at `:host` scope.
+- **`FaustOrbitUI`** — the legacy renderer that draws the parameter dots and detail panel. `OrbitUI` wraps it; you only need it directly if you want the bare orbit view without the library / calque / loop layers. Does **not** use shadow DOM — its styles must be loaded by the host via `<link>` (see [CSS](#css) below).
 
 What this package does **not** do:
 
@@ -33,7 +33,10 @@ The demo wires `OrbitUI` against the legacy `ui.json` and surfaces every emitted
 
 ```html
 <div id="orbit-root" style="height: 480px"></div>
-<link rel="stylesheet" href="./dist/faust-orbit-ui.css" />
+<!-- Material Symbols font is loaded by the host page; the @font-face
+     reaches inside the shadow root automatically. The wrapper's own
+     stylesheet is inlined into the shadow at construction time —
+     no <link> needed for `OrbitUI`. -->
 <link rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..500,0,0" />
 <script type="module">
@@ -85,6 +88,46 @@ The component bundles seven concerns the host doesn't have to reinvent:
   - *Params* (per instance): before/after snapshots per gesture commit. Triggered by `undoParams()` / `redoParams()`.
 - **Recall menu** — pill in the toolbar with a `+ Save current state as preset` entry (with inline name input) and the alphabetised list of named presets, gold-✓ on the active one.
 
+## Theming
+
+The wrapper renders inside a shadow root, so host stylesheets cannot reach
+inside via class selectors (`.orbit-center-btn`, `.orbit-random-btn`, etc.).
+Theming happens through CSS custom properties declared at `:host` scope —
+they pierce the shadow boundary, so a host's override on the shadow-host
+element reaches every styled element inside.
+
+```css
+/* Override on the host element you pass to `new OrbitUI(host, …)`. */
+#orbit-root {
+  --orbit-bg: #0a1018;
+  --orbit-pill-bg: rgba(255, 255, 255, 0.06);
+  --orbit-pill-border: rgba(255, 255, 255, 0.12);
+  --orbit-pill-hover-bg: rgba(255, 255, 255, 0.10);
+  --orbit-fg: #e8edf4;
+  --orbit-accent-bg: #5b9bd5;
+  --orbit-accent-fg: #ffffff;
+  --orbit-accent-border: #7fb4e0;
+}
+```
+
+Public theming surface (defaults match the dark palette in the demo):
+
+| Property | Role |
+|---|---|
+| `--orbit-bg` | Main canvas / body background |
+| `--orbit-toolbar-bg` | Top toolbar + bottom detail panel background |
+| `--orbit-toolbar-line` | Divider lines + slider track |
+| `--orbit-pill-bg` | Pill button background (Center / Random / Zoom / Library / Trash / preset value box) |
+| `--orbit-pill-border` | Pill button border |
+| `--orbit-pill-hover-bg` | Pill hover background |
+| `--orbit-fg` | Pill text, slider thumb, value labels |
+| `--orbit-fg-muted` | Secondary labels (BPM, ms, …) |
+| `--orbit-accent-bg` | Active / pressed pill background (e.g. Library when calque is open) |
+| `--orbit-accent-fg` | Active / pressed pill text |
+| `--orbit-accent-border` | Active / pressed pill border |
+
+Custom properties are the **only** way for hosts to theme the wrapper. Class-based overrides on internal selectors no longer work since v0.4.0 (shadow DOM isolation).
+
 ## Documentation
 
 | Doc | Scope |
@@ -104,10 +147,13 @@ window.addEventListener('keydown', (event) => {
   if (event.repeat) return;
   const focused = document.activeElement;
   if (!(focused instanceof HTMLElement)) return;
-  if (!focused.closest('.orbit-ui-root')) return;
+  const root = focused.closest('.orbit-ui-root');
+  if (!root) return;
   // Route on calque visibility, not focus position — toolbar clicks
-  // can move focus out of the overlay during a calque session.
-  const calqueOpen = !!root.querySelector('.orbit-ui-overlay-active');
+  // can move focus out of the overlay during a calque session. The
+  // wrapper mirrors the calque-active state onto the host element's
+  // classList so this check works without piercing the shadow root.
+  const calqueOpen = root.classList.contains('orbit-ui-overlay-active');
   event.preventDefault();
   const isRedo = event.shiftKey;
   if (calqueOpen) (isRedo ? orbit.redoLibrary() : orbit.undoLibrary());
@@ -115,10 +161,10 @@ window.addEventListener('keydown', (event) => {
 });
 ```
 
-The component guarantees two CSS classes for routing decisions:
+The component guarantees two CSS classes for routing decisions, both on the host element (the `container` passed to `new OrbitUI(...)`):
 
-- `.orbit-ui-root` on the container.
-- `.orbit-ui-overlay-active` on the calque overlay when it's open.
+- `.orbit-ui-root` — added at construction.
+- `.orbit-ui-overlay-active` — toggled when the calque opens / closes.
 
 ## UI JSON expectations
 
@@ -192,13 +238,19 @@ When the calque is open, this detail bar is overlaid by the portamento + loop co
 
 ## CSS
 
-The package ships a single bundled stylesheet:
+For **`OrbitUI` (wrapper)** — no `<link>` needed. The wrapper inlines its
+stylesheet inside its shadow root at construction time.
+
+For **`FaustOrbitUI` (legacy)** — the host must include the bundled
+stylesheet, which renders into the document tree (no shadow):
 
 ```html
 <link rel="stylesheet" href="./dist/faust-orbit-ui.css" />
 ```
 
-It covers both the legacy renderer styles and the calque / dropdown / preset-pill additions. No automatic style injection is done by JS — the host must include the CSS.
+The bundle covers the legacy renderer styles plus the calque / dropdown /
+preset-pill additions, so a host can transition between the two paths
+without touching the link tag.
 
 ## Repository layout
 

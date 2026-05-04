@@ -1,52 +1,52 @@
-# Modèle de données du composant Faust Orbit UI
+# Data model of the Faust Orbit UI component
 
-## Cadrage
+## Scope
 
-Ce document décrit l'**ensemble** des données vivantes à un instant donné dans une instance du composant *Faust Orbit UI* — pas seulement ce qu'il sauvegarde. Il sert de référence partagée pour raisonner sur sa frontière conceptuelle, son périmètre de responsabilité, et les contrats qu'il établit avec son hôte.
+This document describes the **set** of live data at a given instant in an instance of the *Faust Orbit UI* component — not just what it persists. It serves as a shared reference for reasoning about its conceptual boundary, its scope of responsibility, and the contracts it establishes with its host.
 
-Il s'agit d'un **modèle conceptuel et mathématique** : les relations décrites ne sont ni un schéma d'implémentation, ni une prescription de stockage. Le composant peut adopter des structures imbriquées, des caches, des observables — peu importe : ce qui est codifié ici est la **forme normale** de l'information manipulée.
+This is a **conceptual and mathematical model**: the relations described are neither an implementation schema nor a storage prescription. The component may adopt nested structures, caches, observables — it does not matter: what is codified here is the **normal form** of the information being manipulated.
 
-## Frontière conceptuelle
+## Conceptual boundary
 
-Orbit UI est une **télécommande** qui ne connaît du DSP Faust que sa **signature paramètres** (la liste des widgets exposés : adresse, type, plage, valeur par défaut). Il ne connaît **pas** :
+Orbit UI is a **remote control** that knows of the Faust DSP only its **parameter signature** (the list of exposed widgets: address, type, range, default value). It does **not** know:
 
-- Le code Faust source.
-- Le runtime audio (`AudioWorkletNode`, compilation, routage).
-- La persistance concrète (IDB, fichiers, cloud).
-- L'identité d'instance (qui décide qu'un orbit-ui existe — c'est l'hôte).
+- The Faust source code.
+- The audio runtime (`AudioWorkletNode`, compilation, routing).
+- The concrete persistence (IDB, files, cloud).
+- Instance identity (who decides that an orbit-ui exists — that is the host).
 
-Tout ce qui dépend du code Faust ou du runtime audio est **hors-scope** par construction. L'hôte fournit ce qui est nécessaire via des points d'entrée bien définis (signature UI au constructeur, état initial, callbacks de mutation, setters pour la sync cross-instance).
+Anything that depends on the Faust code or the audio runtime is **out of scope** by construction. The host provides what is necessary via well-defined entry points (UI signature at construction, initial state, mutation callbacks, setters for cross-instance sync).
 
 ## Notation
 
-Identique à `DAWDATAMODELSPEC.md` :
+Identical to `DAWDATAMODELSPEC.md`:
 
 ```
-NomRelation = (**clef primaire**, attribut : type, attribut → AutreRelation, …)
+RelationName = (**primary key**, attribute : type, attribute → OtherRelation, …)
 ```
 
-avec :
+with:
 
-- **`**…**`** — clef primaire (composite si plusieurs colonnes séparées par virgules)
-- **`→ Table`** — clef étrangère vers la PK de `Table`
-- **`?`** — optionnel
-- **`{a, b, c}`** — type énuméré
-- **`[1]`** ou **`[0..1]`** — cardinalité de la table
+- **`**…**`** — primary key (composite if multiple columns separated by commas)
+- **`→ Table`** — foreign key to the PK of `Table`
+- **`?`** — optional
+- **`{a, b, c}`** — enumerated type
+- **`[1]`** or **`[0..1]`** — cardinality of the table
 
-## Durée de vie
+## Lifetime
 
-| Marqueur | Sens |
+| Marker | Meaning |
 |---|---|
-| 🛰 | Entrée externe (fournie par l'hôte) |
-| 📚 | Persistance latérale (déléguée à l'hôte via état initial + events) |
-| ⚡ | Runtime in-memory du composant, reconstitué au reload |
-| 🎯 | Geste in-flight |
+| 🛰 | External input (provided by the host) |
+| 📚 | Lateral persistence (delegated to the host via initial state + events) |
+| ⚡ | Component runtime in-memory, reconstituted on reload |
+| 🎯 | In-flight gesture |
 
-**Règle structurante** : tout ce qui est ⚡ doit pouvoir se reconstituer à partir des entrées 🛰 + des persistances latérales 📚.
+**Structuring rule**: anything that is ⚡ must be reconstitutable from the 🛰 inputs + the 📚 lateral persistences.
 
-## A. Entrée : signature UI 🛰
+## A. Input: UI signature 🛰
 
-L'hôte fournit la signature de l'effet Faust à orbit-ui à la création.
+The host provides the signature of the Faust effect to orbit-ui at creation.
 
 ```
 ParamSpec      = (**address : string**,
@@ -58,15 +58,15 @@ ParamSpec      = (**address : string**,
 MenuEntry      = (**label : string, value : float**)
 ```
 
-L'**identifiant `uiHash`** est dérivé de l'ensemble `ParamSpec` (SHA-256 d'une normalisation : tri par address, sérialisation des champs identité). Orbit-ui le calcule en interne au boot et l'expose via `orbit.uiHash`. C'est l'**identité de la signature** : tout ce qui partage la même signature UI partage le même `uiHash`. L'hôte ne l'implémente pas — il le **lit** sur le composant.
+The **identifier `uiHash`** is derived from the `ParamSpec` set (SHA-256 of a normalization: sort by address, serialization of identity fields). Orbit-ui computes it internally at boot and exposes it via `orbit.uiHash`. This is the **identity of the signature**: anything that shares the same UI signature shares the same `uiHash`. The host does not implement it — it **reads** it from the component.
 
-Le composant ne connaît pas l'identité d'instance (session, slot, …). Du point de vue du composant, il y a **une seule** instance — la sienne — et une seule trajectoire courante. C'est l'hôte qui gère les identifiants de stockage externes, sans les exposer au composant.
+The component does not know instance identity (session, slot, …). From the component's point of view, there is **only one** instance — its own — and a single current trajectory. It is the host that manages the external storage identifiers, without exposing them to the component.
 
-## B. Bibliothèque de presets 📚
+## B. Preset library 📚
 
-La library catalogue les configurations visitées. Chaque entrée est un **lieu** dans l'espace des paramètres ; le champ `name?` distingue les **nommés** (épinglés par l'utilisateur, permanents) des **anonymes** (lieux visités, soumis à l'éviction).
+The library catalogs the visited configurations. Each entry is a **place** in the parameter space; the `name?` field distinguishes the **named** ones (pinned by the user, permanent) from the **anonymous** ones (visited places, subject to eviction).
 
-L'hôte est responsable de la persistance ; orbit-ui en gère un cache local synchrone, met à jour via setters et émet `onLibraryChange`.
+The host is responsible for persistence; orbit-ui maintains a synchronous local cache of it, updates via setters, and emits `onLibraryChange`.
 
 ```
 Preset             = (**ui_hash : string, config_hash : string**,
@@ -76,22 +76,22 @@ PresetConfigEntry  = (**ui_hash, config_hash → Preset, address : string**,
                       value : float)
 ```
 
-- **`ui_hash`** = identité de la signature paramètres ; **`config_hash`** = identité de la configuration. Pas de référence au code Faust.
-- **`name`** absent → preset **anonyme**, soumis à l'éviction FIFO. Présent → preset **nommé**, permanent (jamais évincé).
-- **`last_seen_at`** sert (a) au calcul du poids dans la projection PCA pondérée et (b) à l'ordre de la navigation centre-step. Mis à jour à chaque fois qu'une instance commit cette configuration.
-- La library est **partagée** par toutes les instances orbit-ui qui exposent le même `uiHash` ; la synchronisation cross-instance passe par l'hôte via `setLibrary`.
+- **`ui_hash`** = identity of the parameter signature; **`config_hash`** = identity of the configuration. No reference to the Faust code.
+- **`name`** absent → **anonymous** preset, subject to FIFO eviction. Present → **named** preset, permanent (never evicted).
+- **`last_seen_at`** is used (a) for computing the weight in the weighted PCA projection and (b) for the centre-step navigation order. Updated each time an instance commits this configuration.
+- The library is **shared** by all orbit-ui instances that expose the same `uiHash`; cross-instance synchronization goes through the host via `setLibrary`.
 
-### Politique d'éviction
+### Eviction policy
 
-Quand le nombre de presets pour un `uiHash` donné dépasse un seuil (par défaut 500), les **anonymes** les plus anciens (par `last_seen_at` ascendant) sont évincés jusqu'à revenir sous le seuil. Les **nommés** ne sont jamais évincés. Les presets référencés par la sélection multi sont protégés (cf. §F).
+When the number of presets for a given `uiHash` exceeds a threshold (500 by default), the oldest **anonymous** ones (by ascending `last_seen_at`) are evicted until falling back below the threshold. **Named** ones are never evicted. Presets referenced by the multi-selection are protected (cf. §F).
 
-### Trash et auto-recréation
+### Trash and auto-recreation
 
-Le trash supprime **vraiment** les presets sélectionnés du catalogue. La trajectoire ne casse pas (chaque event embed sa propre configuration — cf. §C). Si l'utilisateur revisite plus tard une configuration supprimée et y reste assez longtemps (dwell timer), un preset anonyme est **auto-recréé** — sans mémoire de la suppression passée.
+The trash **truly** removes the selected presets from the catalog. The trajectory does not break (each event embeds its own configuration — cf. §C). If the user later revisits a deleted configuration and stays there long enough (dwell timer), an anonymous preset is **auto-recreated** — with no memory of the past deletion.
 
-## C. Trajectoire 📚
+## C. Trajectory 📚
 
-Le composant maintient **une** trajectoire courante (singleton) — un log append-only des configurations committées par geste pendant la durée de vie de l'instance. **Pas de `code_hash`** : l'invariance par rapport aux édits de code non-UI est portée par `ui_hash` (consistance avec la library). L'hôte sait sous quelle clef externe stocker cette trajectoire (par exemple `(session_id, instance_id)`) mais le composant ne le voit pas.
+The component maintains **one** current trajectory (singleton) — an append-only log of configurations committed per gesture during the lifetime of the instance. **No `code_hash`**: invariance with respect to non-UI code edits is carried by `ui_hash` (consistency with the library). The host knows under which external key to store this trajectory (for example `(session_id, instance_id)`) but the component does not see it.
 
 ```
 TrajectoryRecord[1]    = (ui_hash : string,
@@ -108,15 +108,15 @@ TrajectoryEventConfig  = (**event_index → TrajectoryEvent, address : string**,
                           value : float)
 ```
 
-- **`head_index`** = dernier event committé (`-1` si vide). **`cursor_index`** = position du curseur de navigation (`-1` si détaché).
-- **`ui_hash`** stocké sur le record permet au composant de valider qu'un `setTrajectory(record)` correspond bien à sa signature courante (sinon le record est rejeté).
-- **`transition_level ∈ {0, 1}`** = niveau de transition dynamique (PRESETSPEC).
-- Cardinalité bornée : FIFO eviction au-delà d'un seuil (par exemple 500 events).
-- **Configuration embedded** : `TrajectoryEventConfig` porte la configuration directement dans l'event, **pas** une référence vers `Preset`. Conséquence : la suppression d'un preset (via trash) ne casse pas la trajectoire — chaque event reste rejouable indépendamment. C'est un compromis assumé : faible duplication de stockage contre robustesse à la suppression du catalogue.
+- **`head_index`** = last committed event (`-1` if empty). **`cursor_index`** = position of the navigation cursor (`-1` if detached).
+- **`ui_hash`** stored on the record allows the component to validate that a `setTrajectory(record)` actually corresponds to its current signature (otherwise the record is rejected).
+- **`transition_level ∈ {0, 1}`** = dynamic transition level (PRESETSPEC).
+- Bounded cardinality: FIFO eviction beyond a threshold (for example 500 events).
+- **Embedded configuration**: `TrajectoryEventConfig` carries the configuration directly in the event, **not** a reference to `Preset`. Consequence: deletion of a preset (via trash) does not break the trajectory — each event remains independently replayable. This is an accepted trade-off: low storage duplication against robustness to catalog deletion.
 
-## D. Instance runtime ⚡
+## D. Runtime instance ⚡
 
-L'état vivant de l'instance courante.
+The live state of the current instance.
 
 ```
 Instance[1]   = (ui_hash : string, signature_revision : int)
@@ -124,12 +124,12 @@ Instance[1]   = (ui_hash : string, signature_revision : int)
 ParamValue    = (**address → ParamSpec**, value : float)
 ```
 
-- `ParamValue` reflète la **valeur courante** des paramètres dans la télécommande. Les writes (drag, recall) la mettent à jour, les reads la consomment (e.g. pour calculer un `config_hash` ou apparenter un commit de geste).
-- L'hôte est notifié des changements via les callbacks (`onParamChange`, `onPresetActivated`, `onTrajectoryChange`, `onCommit` — cf. [API.md](API.md)).
+- `ParamValue` reflects the **current value** of the parameters in the remote control. Writes (drag, recall) update it, reads consume it (e.g. to compute a `config_hash` or to relate a gesture commit).
+- The host is notified of changes via callbacks (`onParamChange`, `onTrajectoryChange`, `onCommit` — cf. [API.md](API.md)).
 
-## E. Calque (overlay niveau-1) ⚡
+## E. Calque (level-1 overlay) ⚡
 
-Le calque est l'interface qui projette la library dans le plan via une PCA pondérée et permet la navigation Shepard.
+The calque is the interface that projects the library into the plane via a weighted PCA and enables Shepard navigation.
 
 ```
 Overlay[1]            = (visible : bool,
@@ -153,27 +153,27 @@ ProjectionVector      = (**projection_id → Projection,
                          value : float)
 ```
 
-- **`OverlayPresetOrder`** matérialise l'ordre Shepard (selon distance projetée).
-- **`Projection`** est un cache reproductible depuis la library + les param specs.
-- La **sélection multi** est modélisée séparément (cf. §F) car elle persiste entre ouvertures du calque.
+- **`OverlayPresetOrder`** materializes the Shepard order (according to projected distance).
+- **`Projection`** is a cache reproducible from the library + the param specs.
+- The **multi-selection** is modeled separately (cf. §F) because it persists across calque openings.
 
-## F. Sélection multi 📚
+## F. Multi-selection 📚
 
-Sous-ensemble ordonné de presets sur lequel l'utilisateur opère explicitement (batch-delete via trash, mode boucle). Persiste par instance — survit aux ouvertures / fermetures du calque, et au reload comme la trajectoire.
+Ordered subset of presets on which the user explicitly operates (batch-delete via trash, loop mode). Persists per instance — survives openings/closings of the calque, and reload like the trajectory.
 
 ```
 SelectionEntry = (**position : int**,
                   preset_ui_hash, preset_config_hash → Preset)
 ```
 
-- Singleton liste ordonnée par `position` (ordre d'insertion).
-- Modifiée par Shift+click (toggle) et par marquee Shift+drag (additif).
-- **Protège de l'éviction** : un preset référencé par la sélection n'est jamais évincé par la politique FIFO, même s'il est anonyme.
-- L'éviction par trash supprime le preset **et** son entrée dans la sélection.
+- Singleton list ordered by `position` (insertion order).
+- Modified by Shift+click (toggle) and by Shift+drag marquee (additive).
+- **Protects from eviction**: a preset referenced by the selection is never evicted by the FIFO policy, even if it is anonymous.
+- Eviction by trash removes the preset **and** its entry in the selection.
 
-## G. Mode boucle 📚 ⚡
+## G. Loop mode 📚 ⚡
 
-Lecture cyclique de la sélection avec interpolation. Les paramètres (tempo, transition) persistent par instance ; l'état d'exécution (active, position courante) est runtime.
+Cyclic playback of the selection with interpolation. The parameters (tempo, transition) persist per instance; the execution state (active, current position) is runtime.
 
 ```
 LoopSettings[1]  = (bpm : float,
@@ -184,13 +184,13 @@ LoopState[0..1]  = (active : bool,
                     current_step : int)
 ```
 
-- **`LoopSettings`** : tempo de cycle ($T_L = 60{,}000 \cdot 4 / \text{BPM}$ ms pour la convention 1 cycle = 1 mesure 4/4), durée de transition $T_p$, niveau d'interpolation. Persiste par instance (📚).
-- **`LoopState`** : état runtime du loop — runtime (⚡), perdu au reload. Au reload le loop n'est pas auto-rejoué ; l'utilisateur le redémarre s'il le souhaite.
-- L'**édition à chaud** de la sélection pendant la boucle est supportée : le pas suivant lit la sélection courante (cf. PRESETSPEC).
+- **`LoopSettings`**: cycle tempo ($T_L = 60{,}000 \cdot 4 / \text{BPM}$ ms for the convention 1 cycle = 1 measure 4/4), transition duration $T_p$, interpolation level. Persists per instance (📚).
+- **`LoopState`**: runtime state of the loop — runtime (⚡), lost on reload. On reload the loop is not auto-replayed; the user restarts it if they wish.
+- **Hot-editing** of the selection during the loop is supported: the next step reads the current selection (cf. PRESETSPEC).
 
 ## H. Auto-promotion (preset tracking) ⚡
 
-Mécanisme stateful qui détecte les configurations stables et les promeut dans la library.
+Stateful mechanism that detects stable configurations and promotes them into the library.
 
 ```
 PromotionTracker[1]  = (last_committed_config_hash : string?,
@@ -202,17 +202,17 @@ InGesture[1]         = (active : bool)
 OverlayActive[1]     = (active : bool)
 ```
 
-- **`PromotionTracker`** : si la config courante reste stable plus de `dwell_threshold_ms` milliseconds, on promeut.
-- **`InGesture`** : suspend la promotion pendant un drag.
-- **`OverlayActive`** : suspend la promotion quand le calque est ouvert (l'utilisateur gère manuellement).
+- **`PromotionTracker`**: if the current config remains stable for more than `dwell_threshold_ms` milliseconds, we promote.
+- **`InGesture`**: suspends promotion during a drag.
+- **`OverlayActive`**: suspends promotion when the calque is open (the user manages manually).
 
 ## I. Undo scopes ⚡
 
-Orbit-ui possède **deux** scopes d'undo, conformément à UNDOREDOSPEC :
+Orbit-ui has **two** undo scopes, in accordance with UNDOREDOSPEC:
 
-### I.1. Library scope (niveau 3b)
+### I.1. Library scope (level 3b)
 
-Par `ui_hash` ; partagé entre toutes les instances orbit-ui de même signature.
+Per `ui_hash`; shared between all orbit-ui instances of the same signature.
 
 ```
 LibraryUndoOp        = (**ui_hash : string, stack : {past, future}, position : int**,
@@ -242,9 +242,9 @@ PresetRecordSnapshotConfig = (**snapshot_id → PresetRecordSnapshot, address : 
                               value : float)
 ```
 
-### I.2. Param scope (niveau 2)
+### I.2. Param scope (level 2)
 
-Par instance ; ops parameters before/after sur un commit de geste.
+Per instance; before/after parameters ops on a gesture commit.
 
 ```
 ParamUndoOp        = (**stack : {past, future}, position : int**,
@@ -255,15 +255,15 @@ ParamSnapshot      = (**stack, position → ParamUndoOp,
                       value : float)
 ```
 
-(Cardinalité par instance : il n'y a qu'une pile par orbit-ui ; clef = `(stack, position)`.)
+(Cardinality per instance: there is only one stack per orbit-ui; key = `(stack, position)`.)
 
-Notes :
-- **Snapshots embarqués** : les ops library qui doivent survivre à la suppression de leur cible portent des copies indépendantes (`PresetRecordSnapshot`) — pas des FK vers `Preset`.
-- Le **scope niveau 1 (chain)** et le **niveau 0 (project)** sont **hors-scope** d'orbit-ui : ils concernent l'arrangement des effets dans une chaîne, pas l'effet lui-même.
+Notes:
+- **Embedded snapshots**: library ops that must survive deletion of their target carry independent copies (`PresetRecordSnapshot`) — not FKs to `Preset`.
+- The **level 1 (chain) scope** and the **level 0 (project)** are **out of scope** of orbit-ui: they concern the arrangement of effects in a chain, not the effect itself.
 
-## J. Recall menu (niveau-0) 🎯
+## J. Recall menu (level 0) 🎯
 
-Menu transient pour sélectionner rapidement un preset par nom.
+Transient menu to quickly select a preset by name.
 
 ```
 RecallMenu[0..1] = (anchor_x : int, anchor_y : int,
@@ -271,14 +271,14 @@ RecallMenu[0..1] = (anchor_x : int, anchor_y : int,
                     selected_preset_index : int)
 ```
 
-## Diagramme des relations
+## Relationship diagram
 
 ```
-                       INPUT EXTERNE 🛰
+                       EXTERNAL INPUT 🛰
                        ────────────────
    ParamSpec (host-fed)
        │
-       └─► (ui_hash dérivé)
+       └─► (ui_hash derived)
 
                        LIBRARY 📚 (host-stored)
                        ───────────────────────
@@ -295,7 +295,7 @@ RecallMenu[0..1] = (anchor_x : int, anchor_y : int,
    SelectionEntry ──► Preset            (cf. §F)
    LoopSettings · LoopState              (cf. §G)
 
-                       INSTANCE RUNTIME ⚡
+                       RUNTIME INSTANCE ⚡
                        ──────────────────
    Instance ── ParamValue
        │
@@ -318,38 +318,38 @@ RecallMenu[0..1] = (anchor_x : int, anchor_y : int,
                        ────────────────
    PromotionTracker · InGesture · OverlayActive
 
-                       NIVEAU 0 🎯
+                       LEVEL 0 🎯
                        ──────────
    RecallMenu
 ```
 
-## Propriétés du modèle
+## Properties of the model
 
-1. **Pureté de la frontière** : aucun champ ne référence le code Faust. Le `ui_hash` est dérivé de la signature. Le `config_hash` est dérivé d'une configuration. Les deux sont calculables depuis ce qu'orbit-ui voit déjà.
+1. **Boundary purity**: no field references the Faust code. The `ui_hash` is derived from the signature. The `config_hash` is derived from a configuration. Both are computable from what orbit-ui already sees.
 
-2. **Cohérence avec la library** : la trajectoire est aussi indexée par `ui_hash` (pas par `code_hash`). Conséquence : un édit de code qui ne change pas l'UI préserve la library **et** la trajectoire — c'est le bon comportement, conforme à PRESETSPEC.
+2. **Consistency with the library**: the trajectory is also indexed by `ui_hash` (not by `code_hash`). Consequence: a code edit that does not change the UI preserves the library **and** the trajectory — that is the right behavior, conforming to PRESETSPEC.
 
-3. **Hash-liaisons** : library et trajectoire sont reliés au monde extérieur (signatures UI, instances, sessions) **par hash**, jamais par FK directes. Conséquence : la disparition d'une instance ne casse rien dans la library ni dans une trajectoire d'une autre instance partageant la même signature.
+3. **Hash bindings**: library and trajectory are linked to the outside world (UI signatures, instances, sessions) **by hash**, never by direct FK. Consequence: the disappearance of an instance breaks nothing in the library nor in a trajectory of another instance sharing the same signature.
 
-4. **Reproductibilité du runtime** : tout ce qui est ⚡ peut se reconstituer à partir des entrées 🛰 + des persistances 📚. Aucune donnée vivante ne disparaît avec un reload pourvu que l'hôte fournisse l'état initial correctement.
+4. **Runtime reproducibility**: anything that is ⚡ can be reconstituted from the 🛰 inputs + the 📚 persistences. No live data disappears with a reload provided the host supplies the initial state correctly.
 
-5. **Persistance déléguée à l'hôte** : le composant ne sait rien de IDB, du serveur, du fichier. Il maintient son état en mémoire, accepte un état initial à la construction, et émet des events à chaque mutation. C'est l'hôte qui choisit comment et où persister.
+5. **Persistence delegated to the host**: the component knows nothing of IDB, the server, the file. It maintains its state in memory, accepts an initial state at construction, and emits events at every mutation. It is the host that chooses how and where to persist.
 
-6. **Cross-instance orchestrée par l'hôte** : plusieurs orbit-ui partageant le même `ui_hash` doivent voir les mêmes données library. Le composant expose des setters (`setLibrary`) que l'hôte appelle quand une autre instance a muté ; le canal de communication (BroadcastChannel, etc.) est l'affaire de l'hôte.
+6. **Cross-instance orchestrated by the host**: multiple orbit-uis sharing the same `ui_hash` must see the same library data. The component exposes setters (`setLibrary`) that the host calls when another instance has mutated; the communication channel (BroadcastChannel, etc.) is the host's affair.
 
-## Ce que ce modèle ne couvre pas (responsabilité hôte)
+## What this model does not cover (host responsibility)
 
-- **Code Faust** et son hash : externe.
-- **Runtime audio** (`AudioWorkletNode`, compilation, chain audio) : externe.
-- **Identification d'instance** : `session_id`, `instance_id` sont gérés par l'hôte (qui keye son store). Orbit-ui ne les voit même pas dans son API.
-- **Persistance concrète** : non gérée par le composant. L'hôte fournit l'état initial via options et écoute les events de mutation pour persister.
-- **Niveau 1 (chain)** et **niveau 0 (project)** d'undo : hors-scope (ce sont des structures supérieures qui contiennent l'orbit-ui, pas qu'il contient).
-- **Routage Cmd+Z global** : l'hôte route ; orbit-ui expose `undoLibrary()` / `redoLibrary()` / `undoParams()` / `redoParams()` que l'hôte appelle quand le focus convient.
+- **Faust code** and its hash: external.
+- **Audio runtime** (`AudioWorkletNode`, compilation, audio chain): external.
+- **Instance identification**: `session_id`, `instance_id` are managed by the host (which keys its store). Orbit-ui does not even see them in its API.
+- **Concrete persistence**: not managed by the component. The host provides the initial state via options and listens to mutation events to persist.
+- **Level 1 (chain)** and **level 0 (project)** undo: out of scope (these are higher-level structures that contain the orbit-ui, not that it contains).
+- **Global Cmd+Z routing**: the host routes; orbit-ui exposes `undoLibrary()` / `redoLibrary()` / `undoParams()` / `redoParams()` that the host calls when focus is appropriate.
 
-## Hors-scope de la spec
+## Out of scope of the spec
 
-- **Algorithme de projection** (PCA pondérée, distances, Shepard) — couvert par PRESETSPEC.
-- **Schéma de stockage concret** (forme IDB, mongo, fichier) — choix de l'hôte.
-- **Mécanisme de synchronisation cross-instance** — choix de l'hôte (BroadcastChannel, polling, WebSocket).
-- **Politique d'éviction du log de trajectoire** — paramétrable par l'hôte.
-- **Forme exacte de l'API publique d'orbit-ui** (méthodes, events, options) — voir [API.md](API.md).
+- **Projection algorithm** (weighted PCA, distances, Shepard) — covered by PRESETSPEC.
+- **Concrete storage schema** (IDB shape, mongo, file) — host's choice.
+- **Cross-instance synchronization mechanism** — host's choice (BroadcastChannel, polling, WebSocket).
+- **Trajectory log eviction policy** — parameterizable by the host.
+- **Exact form of orbit-ui's public API** (methods, events, options) — see [API.md](API.md).

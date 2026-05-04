@@ -1,45 +1,45 @@
-# Spécification du mode boucle
+# Loop mode specification
 
-Le **mode boucle** permet de visiter cycliquement une sélection de presets en passant continûment de l'un au suivant : à chaque pas, le son glisse sur une trajectoire interpolée entre deux presets, puis stationne brièvement sur le suivant, avant de repartir vers le preset d'après. La boucle reboucle à l'infini.
+The **loop mode** allows cyclic visiting of a selection of presets by continuously moving from one to the next: at each step, the sound glides along an interpolated trajectory between two presets, then briefly holds on the next one, before moving on toward the following preset. The loop loops indefinitely.
 
-## Cadrage
+## Scope
 
-Ce document décrit le **mode boucle** de l'overlay niveau-1 (calque) du composant *Faust Orbit UI* : la lecture cyclique d'une sélection de presets avec des transitions interpolées via Shepard. C'est un sous-système du calque, dont les concepts plus larges sont définis par [PRESETS.md](PRESETS.md), [DATAMODEL.md](DATAMODEL.md) et [API.md](API.md).
+This document describes the **loop mode** of the level-1 overlay (calque) of the *Faust Orbit UI* component: the cyclic playback of a preset selection with interpolated transitions via Shepard. It is a sub-system of the calque, whose broader concepts are defined by [PRESETS.md](PRESETS.md), [DATAMODEL.md](DATAMODEL.md) and [API.md](API.md).
 
-Le présent document **formalise précisément l'état du système de boucle à un instant T**, les transitions entre phases, et le comportement attendu lors de modifications dynamiques de la sélection. Il sert de référence pour l'implémentation et pour le raisonnement sur les cas limites.
+This document **precisely formalizes the state of the loop system at an instant T**, the transitions between phases, and the expected behavior under dynamic modifications of the selection. It serves as a reference for implementation and for reasoning about edge cases.
 
 ## Notation
 
-| Symbole | Sens |
+| Symbol | Meaning |
 |---|---|
-| `P` | l'ensemble des presets connus (la library) |
-| `S = [s_0, s_1, …, s_{n−1}]` | la sélection : liste ordonnée de presets distincts, `s_i ∈ P`, `\|S\| = n` |
-| `S[j]` | accesseur cyclique : `S[j] = S[j mod n]` (défini pour tout `j ≥ 0` quand `n > 0`) |
-| `pos(p)` | position visuelle (en coordonnées de projection) du preset `p` |
-| `c` | position courante du curseur central (en coordonnées de projection) |
-| `ψ(c)` | configuration audible interpolée par Shepard à la position `c` |
+| `P` | the set of known presets (the library) |
+| `S = [s_0, s_1, …, s_{n−1}]` | the selection: ordered list of distinct presets, `s_i ∈ P`, `\|S\| = n` |
+| `S[j]` | cyclic accessor: `S[j] = S[j mod n]` (defined for all `j ≥ 0` when `n > 0`) |
+| `pos(p)` | visual position (in projection coordinates) of preset `p` |
+| `c` | current position of the central cursor (in projection coordinates) |
+| `ψ(c)` | audible configuration interpolated by Shepard at position `c` |
 
-## Paramètres réglables
+## Adjustable parameters
 
-Trois entrées continues que l'utilisateur ajuste en direct via la barre du bas. Le système les **lit en direct** à chaque tick — il n'en prend jamais de cliché.
+Three continuous inputs that the user adjusts live via the bottom bar. The system **reads them live** at each tick — it never takes a snapshot of them.
 
-| Symbole | Sens | Source |
+| Symbol | Meaning | Source |
 |---|---|---|
-| `T_L` | durée totale d'un cycle (ms = une mesure 4/4 au tempo) | slider BPM |
-| `v` | durée d'un déplacement entre deux presets (ms) | slider Tp (portamento) |
-| `r` | durée de stationnement sur un preset (ms) | dérivée |
+| `T_L` | total duration of one cycle (ms = one 4/4 measure at the tempo) | BPM slider |
+| `v` | duration of a movement between two presets (ms) | Tp slider (portamento) |
+| `r` | hold duration on a preset (ms) | derived |
 
-`r` est dérivé en direct : `r(n) = max(T_L / n − v, 0)`. Cela donne une sémantique « tempo, pas densité » : ajouter ou retirer des presets de `S` change la densité (combien de presets visités par cycle), pas le tempo.
+`r` is derived live: `r(n) = max(T_L / n − v, 0)`. This gives a "tempo, not density" semantics: adding or removing presets from `S` changes the density (how many presets visited per cycle), not the tempo.
 
-## Hypothèses
+## Assumptions
 
-- Pendant la boucle, **tout fonctionne à `n > 0`**. Si `n = 0` la boucle s'arrête (cf. § *Stopping*).
-- Pendant un déplacement, le curseur progresse linéairement de la position de départ vers la position cible. La progression normalisée est notée `g ∈ [0, 1]`. À `g = 0` on est à la position de départ ; à `g = 1` on est à la cible.
-- Le son émis à tout instant est `ψ(c)` où `c` est la position courante du curseur.
+- During the loop, **everything operates with `n > 0`**. If `n = 0` the loop stops (cf. § *Stopping*).
+- During a movement, the cursor progresses linearly from the starting position toward the target position. The normalized progression is denoted `g ∈ [0, 1]`. At `g = 0` we are at the starting position; at `g = 1` we are at the target.
+- The sound emitted at any instant is `ψ(c)` where `c` is the current cursor position.
 
-## A. État à l'instant T
+## A. State at instant T
 
-L'état de la boucle est l'une de trois valeurs :
+The state of the loop is one of three values:
 
 ```
 LoopState =
@@ -48,26 +48,26 @@ LoopState =
   | Hold   { on   : configHash, startedAt : ms }
 ```
 
-avec
+with
 
-- `Inactive` : la boucle ne tourne pas.
-- `Motion` : on est en train de se déplacer **vers** le preset `to`. `from` est la position du curseur au début du déplacement (peut être `pos(prev)` d'un preset précédent ou n'importe quelle position dans le plan). `startedAt` est l'horodatage de l'amorce du déplacement.
-- `Hold` : on est stationné **sur** le preset `on`. `startedAt` est l'horodatage de l'amorce du stationnement.
+- `Inactive`: the loop is not running.
+- `Motion`: we are moving **toward** the preset `to`. `from` is the cursor position at the start of the movement (may be `pos(prev)` of a previous preset or any position in the plane). `startedAt` is the timestamp of the start of the movement.
+- `Hold`: we are held **on** the preset `on`. `startedAt` is the timestamp of the start of the hold.
 
-`Motion.from` est volontairement une `Pos` (et non un `configHash`) : après un swap (cf. §C), un déplacement peut être amorcé depuis n'importe quel point continu — pas nécessairement la position d'un preset.
+`Motion.from` is intentionally a `Pos` (and not a `configHash`): after a swap (cf. §C), a movement may be initiated from any continuous point — not necessarily the position of a preset.
 
-## B. Dérivations à l'instant `now`
+## B. Derivations at instant `now`
 
-L'état porte les ancres temporelles ; tout le reste est calculé à la volée à chaque trame d'animation.
+The state holds the temporal anchors; everything else is computed on the fly at each animation frame.
 
-Pendant **Motion** (avec `target_pos = pos(to)`) :
+During **Motion** (with `target_pos = pos(to)`):
 
 ```
 g = clamp((now − startedAt) / v, 0, 1)
 c = lerp(from, target_pos, g)
 ```
 
-Pendant **Hold** (avec `target_pos = pos(on)`) :
+During **Hold** (with `target_pos = pos(on)`):
 
 ```
 c        = target_pos
@@ -76,15 +76,15 @@ r_now    = max(T_L / n − v, 0)
 remain   = max(r_now − elapsed, 0)
 ```
 
-Le son est en permanence `ψ(c)`.
+The sound is permanently `ψ(c)`.
 
-## C. Transitions entre phases
+## C. Transitions between phases
 
-Trois transitions (toutes lues à chaque tick) :
+Three transitions (all read at each tick):
 
 ### C.1. `Motion → Hold`
 
-Quand `g` atteint 1 :
+When `g` reaches 1:
 
 ```
 state := Hold { on: state.to, startedAt: now }
@@ -92,7 +92,7 @@ state := Hold { on: state.to, startedAt: now }
 
 ### C.2. `Hold → Motion`
 
-Quand `elapsed ≥ r_now` :
+When `elapsed ≥ r_now`:
 
 ```
 nextHash := chooseNext(state.on, S)        # cf. §E
@@ -105,7 +105,7 @@ state    := Motion {
 
 ### C.3. `Active → Inactive`
 
-Stop explicite (bouton ■, Esc, hide, setLibrary externe, etc. — cf. §F) :
+Explicit stop (■ button, Esc, hide, external setLibrary, etc. — cf. §F):
 
 ```
 state := Inactive
@@ -113,61 +113,61 @@ state := Inactive
 
 ### C.4. `Inactive → Active`
 
-Démarrage explicite (bouton ▶) avec `n > 0` :
+Explicit start (▶ button) with `n > 0`:
 
 ```
 nextHash := S[0]
 state    := Motion {
-  from:      <position courante du curseur>,
+  from:      <current cursor position>,
   to:        nextHash,
   startedAt: now,
 }
 ```
 
-## D. `swap(S')` : changement dynamique de sélection
+## D. `swap(S')`: dynamic change of selection
 
-Le contrat d'un swap : remplacer la sélection `S` (avec `\|S\| = n > 0`) par `S'` (avec `\|S'\| = m > 0`) **en créant le minimum de discontinuités**.
+The contract of a swap: replace the selection `S` (with `\|S\| = n > 0`) by `S'` (with `\|S'\| = m > 0`) **while creating the minimum of discontinuities**.
 
-Une *discontinuité* est ici un saut non-continu de la position `c` du curseur (et donc, par conséquence, un saut audio via `ψ`).
+A *discontinuity* is here a non-continuous jump in the cursor position `c` (and therefore, as a consequence, an audio jump via `ψ`).
 
-La règle :
+The rule:
 
 ```
 let target := state.to     if Motion
             state.on     if Hold
 
 if target ∈ S':
-    # Cas 1 : le preset visé fait toujours partie de la sélection.
-    # On garde l'état tel quel. Aucune discontinuité.
-    state inchangé
-    # (Hold.elapsed reste valide ; le prochain Hold→Motion lira S'
-    #  pour calculer le successeur.)
+    # Case 1: the targeted preset is still part of the selection.
+    # We keep the state as is. No discontinuity.
+    state unchanged
+    # (Hold.elapsed remains valid; the next Hold→Motion will read S'
+    #  to compute the successor.)
 
 else:
-    # Cas 2 : le preset visé n'est plus dans la sélection.
-    # On choisit le preset de S' visuellement le plus proche du curseur,
-    # et on amorce un Motion vers lui depuis la position courante c.
+    # Case 2: the targeted preset is no longer in the selection.
+    # We choose the preset of S' visually closest to the cursor,
+    # and initiate a Motion toward it from the current position c.
     target' := S'[ argmin_{j ∈ [0, m)} ‖ pos(S'[j]) − c ‖ ]
     state   := Motion {
-      from:      c,            # position courante du curseur
+      from:      c,            # current cursor position
       to:        target',
       startedAt: now,
     }
 ```
 
-`c` est dans les deux cas la valeur dérivée à l'instant du swap (§B). Le déplacement amorcé en cas 2 utilise la durée `v` courante, comme tout autre déplacement.
+`c` is in both cases the value derived at the instant of the swap (§B). The movement initiated in case 2 uses the current `v` duration, like any other movement.
 
-### Conséquences notables
+### Notable consequences
 
-- **`\|S\| = 1`** : la boucle ne s'arrête pas. Une fois rejoint l'unique preset `p`, on alterne `Hold(on=p)` → `Motion(from=pos(p), to=p)` (déplacement dégénéré, `g = 1` immédiatement) → `Hold(on=p)` → … . Le curseur reste sur `p` ; la boucle continue de « tourner » en attendant un changement de sélection.
+- **`\|S\| = 1`**: the loop does not stop. Once the unique preset `p` is reached, we alternate `Hold(on=p)` → `Motion(from=pos(p), to=p)` (degenerate movement, `g = 1` immediately) → `Hold(on=p)` → … . The cursor stays on `p`; the loop continues to "run" while waiting for a change of selection.
 
-- **Suppression d'un preset de `S` mid-Motion** : si le preset cible disparaît, on dévie continûment vers le plus proche dans `S'`. Pas de jump, juste un changement d'angle.
+- **Removal of a preset from `S` mid-Motion**: if the target preset disappears, we deviate continuously toward the closest one in `S'`. No jump, just a change of angle.
 
-- **Ajout d'un preset à `S` mid-cycle** : pas de changement de phase immédiate. Le nouveau preset entre simplement dans la rotation au prochain `Hold→Motion` (selon la règle `chooseNext` du §E).
+- **Addition of a preset to `S` mid-cycle**: no immediate phase change. The new preset simply enters the rotation at the next `Hold→Motion` (according to the `chooseNext` rule of §E).
 
-## E. `chooseNext(current, S)` : règle de succession
+## E. `chooseNext(current, S)`: succession rule
 
-Quand un Hold se termine, on choisit le preset suivant dans la sélection courante :
+When a Hold ends, the next preset in the current selection is chosen:
 
 ```
 i := S.indexOf(current)
@@ -175,49 +175,49 @@ i := S.indexOf(current)
 if i ≥ 0:
     return S[(i + 1) mod n]
 else:
-    # `current` n'est plus dans S (a été retiré entre le swap et la
-    # transition Hold→Motion, ou jamais ajouté). On reprend au début.
+    # `current` is no longer in S (was removed between the swap and the
+    # Hold→Motion transition, or never added). We restart at the beginning.
     return S[0]
 ```
 
-C'est la même règle que dans webdaw aujourd'hui, mais toujours appliquée sur la **sélection vivante** au moment de la transition — jamais sur un cliché.
+This is the same rule as in webdaw today, but always applied to the **live selection** at the moment of the transition — never to a snapshot.
 
-## F. Stopping : quels gestes arrêtent la boucle
+## F. Stopping: which gestures stop the loop
 
-Les seuls gestes qui forcent `Active → Inactive` sont ceux qui prennent la main sur le curseur :
+The only gestures that force `Active → Inactive` are those that take over the cursor:
 
-| Geste | Effet sur la boucle |
+| Gesture | Effect on the loop |
 |---|---|
-| Clic ■ (bouton stop) | **arrête** |
-| Esc / fermeture du calque | **arrête** |
-| `setLibrary` externe (sync hôte) | **arrête** (la base change sous nos pieds) |
-| Clic simple sur un preset (recall + drag central) | **arrête** (manipulation directe) |
-| Clic simple sur le vide (drag central) | **arrête** (manipulation directe) |
-| Drag du curseur central | **arrête** (manipulation directe) |
-| Curseur ←/→ (saut au preset suivant manuel) | **arrête** (saut manuel) |
-| Trash (suppression) | **n'arrête pas** sauf si la sélection devient vide ⇒ stop |
-| Shift+clic sur un preset (toggle dans `S`) | **n'arrête pas** — `S` change, swap rule en §D |
-| Shift+drag (rectangle de sélection) | **n'arrête pas** — `S'` remplace `S`, swap rule en §D |
-| Mouvement du slider Tp ou BPM | **n'arrête pas** — lecture en direct §B/§C |
+| Click ■ (stop button) | **stops** |
+| Esc / closing the calque | **stops** |
+| External `setLibrary` (host sync) | **stops** (the base changes under our feet) |
+| Single click on a preset (recall + central drag) | **stops** (direct manipulation) |
+| Single click on empty space (central drag) | **stops** (direct manipulation) |
+| Drag of the central cursor | **stops** (direct manipulation) |
+| Cursor ←/→ (manual jump to next preset) | **stops** (manual jump) |
+| Trash (deletion) | **does not stop** unless the selection becomes empty ⇒ stop |
+| Shift+click on a preset (toggle in `S`) | **does not stop** — `S` changes, swap rule in §D |
+| Shift+drag (selection rectangle) | **does not stop** — `S'` replaces `S`, swap rule in §D |
+| Movement of the Tp or BPM slider | **does not stop** — live read §B/§C |
 
-### Sémantique du rectangle de sélection
+### Selection rectangle semantics
 
-Le rectangle de sélection (shift+drag sur le vide) **remplace** `S` par l'ensemble des presets contenus dans le rectangle. Ce n'est plus additif. Cohérent avec le swap rule (§D) : on peut redéfinir la sélection complète en cours de boucle sans arrêter la lecture.
+The selection rectangle (shift+drag on empty space) **replaces** `S` with the set of presets contained in the rectangle. It is no longer additive. Consistent with the swap rule (§D): the entire selection can be redefined while the loop is running without stopping playback.
 
-(Le shift+clic sur un preset reste, lui, un toggle additif/soustractif — c'est l'édition fine d'une sélection existante.)
+(Shift+click on a preset, on the other hand, remains an additive/subtractive toggle — that is the fine-grained editing of an existing selection.)
 
-## G. Cardinalité / boundedness
+## G. Cardinality / boundedness
 
-Aucune borne dure côté boucle. Les bornes connues :
+No hard bound on the loop side. The known bounds:
 
-- `\|S\| ≥ 1` pour que la boucle puisse être active.
-- `T_L > 0`, `v ≥ 0`, `r(n) ≥ 0` (clampé à 0 si `T_L / n < v`).
+- `\|S\| ≥ 1` for the loop to be active.
+- `T_L > 0`, `v ≥ 0`, `r(n) ≥ 0` (clamped to 0 if `T_L / n < v`).
 
-Quand `T_L / n < v` (le portamento est plus long que le pas naturel), `r = 0` et la boucle enchaîne les déplacements sans pause — comportement assumé.
+When `T_L / n < v` (the portamento is longer than the natural step), `r = 0` and the loop chains movements without pause — assumed behavior.
 
-## H. Hors-scope
+## H. Out of scope
 
-- **Politique d'éviction de `S`** : la sélection ne fait pas l'objet d'une politique d'éviction propre ; cf. ORBITDATAMODELSPEC §F.
-- **Synchronisation cross-instance des paramètres `T_L` et `v`** : ce sont des `LoopSettings` persistés par instance (cf. ORBITDATAMODELSPEC §G) ; le composant les expose via `setLoopSettings` / `onLoopSettingsChange` mais le canal entre instances est l'affaire de l'hôte.
-- **Limitation rAF en onglet d'arrière-plan** : les navigateurs étranglent `requestAnimationFrame` à ~1 Hz quand l'onglet n'est pas visible, ce qui dégrade la boucle en sauts discrets. Pas de mitigation prévue ici ; détacher l'onglet en fenêtre restaure le comportement nominal.
-- **Forme exacte de l'API** (types `LoopSettings`, événements `onLoopSettingsChange`, etc.) : voir ORBITUIAPISPEC.md.
+- **Eviction policy of `S`**: the selection is not subject to its own eviction policy; cf. ORBITDATAMODELSPEC §F.
+- **Cross-instance synchronization of parameters `T_L` and `v`**: these are `LoopSettings` persisted per instance (cf. ORBITDATAMODELSPEC §G); the component exposes them via `setLoopSettings` / `onLoopSettingsChange` but the channel between instances is the host's concern.
+- **rAF limitation in background tabs**: browsers throttle `requestAnimationFrame` to ~1 Hz when the tab is not visible, which degrades the loop into discrete jumps. No mitigation planned here; detaching the tab into a window restores nominal behavior.
+- **Exact form of the API** (`LoopSettings` types, `onLoopSettingsChange` events, etc.): see ORBITUIAPISPEC.md.

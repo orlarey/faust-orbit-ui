@@ -1,482 +1,481 @@
-# Spécification des presets FX
+# FX presets specification
 
-## Cadrage
+## Scope
 
-Ce document fixe le vocabulaire et les invariants des **trajectoires** et **presets** d'effets DSP Faust. Il précède tout choix d'implémentation. L'objectif est que chaque terme ait un sens unique et que l'on puisse parler de production, navigation, mémorisation et rappel sans ambiguïté.
+This document fixes the vocabulary and invariants of **trajectories** and **presets** of Faust DSP effects. It precedes any implementation choice. The goal is that each term has a unique meaning and that one can talk about production, navigation, memoisation and recall without ambiguity.
 
-## Définitions mathématiques
+## Mathematical definitions
 
-### Paramètre
+### Parameter
 
-Un DSP Faust expose un ensemble **fini** de paramètres :
+A Faust DSP exposes a **finite** set of parameters:
 
 $$P = \{p_1, p_2, \dots, p_n\}$$
 
-Chaque paramètre $p_i$ porte :
+Each parameter $p_i$ carries:
 
-- une **adresse** unique (chaîne, ex. `"/reverb/wet"`)
-- un **domaine** $D(p_i)$ de valeurs autorisées (intervalle continu discrétisé par un pas, ensemble de catégories, booléen)
-- une **valeur d'initialisation** $d(p_i) \in D(p_i)$ fournie par le DSP
+- a unique **address** (string, e.g. `"/reverb/wet"`)
+- a **domain** $D(p_i)$ of allowed values (continuous interval discretised by a step, set of categories, boolean)
+- an **initialisation value** $d(p_i) \in D(p_i)$ provided by the DSP
 
 ### Configuration
 
-Une **configuration** pour un DSP donné est un mapping total :
+A **configuration** for a given DSP is a total mapping:
 
-$$c : P \to \bigcup_i D(p_i) \quad \text{tel que} \quad c(p_i) \in D(p_i) \ \forall p_i \in P$$
+$$c : P \to \bigcup_i D(p_i) \quad \text{such that} \quad c(p_i) \in D(p_i) \ \forall p_i \in P$$
 
-### Espace des paramètres
+### Parameter space
 
-L'ensemble des configurations possibles :
+The set of possible configurations:
 
 $$E(\text{dsp}) = \prod_i D(p_i)$$
 
-### Configuration par défaut
+### Default configuration
 
-Pour chaque DSP, une configuration unique :
+For each DSP, a unique configuration:
 
 $$c_{\text{default}}(p_i) = d(p_i) \quad \forall p_i$$
 
-Elle existe sans action utilisateur.
+It exists without any user action.
 
-### Trajectoire (vue mathématique)
+### Trajectory (mathematical view)
 
-Pour une instance d'effet, l'interaction produit une fonction constante par morceaux :
+For an effect instance, interaction produces a piecewise constant function:
 
 $$T : \mathbb{R}_{\geq 0} \to E(\text{dsp})$$
 
-avec $T(0) = c_{\text{default}}$, discontinue aux instants de commits de geste.
+with $T(0) = c_{\text{default}}$, discontinuous at the instants of gesture commits.
 
-## Représentation opérationnelle
+## Operational representation
 
-### Log de trajectoire
+### Trajectory log
 
-La trajectoire est persistée comme un **log append-only** :
+The trajectory is persisted as an **append-only log**:
 
 $$L = [e_0, e_1, \dots, e_h] \qquad e_i = (t_i, c_i)$$
 
-où $t_i$ est le timestamp du commit et $c_i \in E$ la configuration commise. Le log est ordonné chronologiquement. Un événement ne peut être retiré que par éviction FIFO quand la capacité maximale est atteinte.
+where $t_i$ is the timestamp of the commit and $c_i \in E$ the committed configuration. The log is chronologically ordered. An event can only be removed by FIFO eviction when the maximum capacity is reached.
 
 ### HEAD
 
-**HEAD** est l'index du dernier événement du log ($h$). Il désigne la configuration « réelle » appliquée par défaut à l'instance.
+**HEAD** is the index of the last event of the log ($h$). It designates the "real" configuration applied by default to the instance.
 
 ### Cursor
 
-Le **cursor** est un index interne dans le log, utilisé exclusivement par
-le mécanisme de commit depuis cursor détaché (cf. §"Commit de geste depuis
-cursor détaché" plus bas). Il n'est **pas exposé dans l'UI niveau 1
-actuel** : aucun marqueur ne le représente sur le calque, aucune touche ne
-le déplace. Il reste à HEAD en pratique, sauf si une future extension
-réintroduit la consultation d'événements antérieurs.
+The **cursor** is an internal index in the log, used exclusively by
+the detached-cursor commit mechanism (cf. §"Gesture commit from detached
+cursor" below). It is **not exposed in the current level-1 UI**:
+no marker represents it on the calque, no key
+moves it. It remains at HEAD in practice, unless a future extension
+reintroduces consultation of prior events.
 
-Propriétés (héritage du modèle initial, gardées pour extensions futures) :
+Properties (inherited from the initial model, kept for future extensions):
 
-- Ne modifie ni le log ni HEAD
-- Détermine la configuration appliquée à l'audio tant qu'il est détaché
-- Revient à HEAD après tout nouveau commit de geste
+- Modifies neither the log nor HEAD
+- Determines the configuration applied to audio as long as it is detached
+- Returns to HEAD after any new gesture commit
 
-## Stockages
+## Storage
 
-| Propriété | Trajectoire | Bibliothèque de presets |
+| Property | Trajectory | Preset library |
 | --- | --- | --- |
-| **Clé d'identification** | $(\text{sessionId}, \text{effectInstanceId})$ | $(\text{uiHash}, c)$ par contenu |
-| **Attribution GC** | $(\text{sessionId}, \text{effectInstanceId})$ | $(\text{sessionId}, \text{uiHash})$ |
-| **Visibilité** | Locale à la session et à l'instance | Workspace-wide |
-| **Dédup** | Aucune — log chronologique | Par contenu |
-| **Durée de vie** | Tant que l'instance existe dans la session (état courant OU undo-reachable) | Tant qu'au moins une session vivante la référence |
-| **Capacité** | Bornée à $N$ événements (≈ 500), éviction FIFO | Illimitée jusqu'au GC |
+| **Identification key** | $(\text{sessionId}, \text{effectInstanceId})$ | $(\text{uiHash}, c)$ by content |
+| **GC attribution** | $(\text{sessionId}, \text{effectInstanceId})$ | $(\text{sessionId}, \text{uiHash})$ |
+| **Visibility** | Local to the session and to the instance | Workspace-wide |
+| **Dedup** | None — chronological log | By content |
+| **Lifetime** | As long as the instance exists in the session (current state OR undo-reachable) | As long as at least one live session references it |
+| **Capacity** | Bounded to $N$ events (≈ 500), FIFO eviction | Unlimited until GC |
 
-## Opérations
+## Operations
 
-### Commit de geste (cursor aligné sur HEAD)
+### Gesture commit (cursor aligned on HEAD)
 
-Quand l'utilisateur termine un geste depuis HEAD produisant $c_{\text{new}}$ :
+When the user finishes a gesture from HEAD producing $c_{\text{new}}$:
 
-1. Le log est étendu : $L' = [e_0, \dots, e_h, e_{\text{new}}]$ avec $e_{\text{new}} = (t_{\text{now}}, c_{\text{new}})$
-2. HEAD avance au nouvel événement
-3. Cursor s'aligne sur HEAD
+1. The log is extended: $L' = [e_0, \dots, e_h, e_{\text{new}}]$ with $e_{\text{new}} = (t_{\text{now}}, c_{\text{new}})$
+2. HEAD advances to the new event
+3. Cursor aligns on HEAD
 
-### Navigation (cycle dans la bibliothèque)
+### Navigation (library cycle)
 
-Les touches **←** et **→** déplacent le centre niveau 1 d'un preset à un
-autre, **dans la bibliothèque** ordonnée par `lastSeenAt` croissant. La
-navigation est cyclique : après le dernier preset, on revient au premier
-et inversement. Le glissement est continu (cf. §"Transitions dynamiques",
-portamento $T_p$) — les flèches ne sont pas un saut instantané.
+The **←** and **→** keys move the level-1 center from one preset to
+another, **in the library** ordered by ascending `lastSeenAt`. Navigation
+is cyclic: after the last preset, one returns to the first
+and conversely. The glide is continuous (cf. §"Dynamic transitions",
+portamento $T_p$) — the arrows are not an instantaneous jump.
 
-La cycle parcourt **chaque entrée de la bibliothèque une seule fois**
-(dédup par contenu). Les revisites enregistrées dans la trajectoire
-n'apparaissent pas comme des étapes distinctes.
+The cycle traverses **each library entry only once**
+(dedup by content). Revisits recorded in the trajectory
+do not appear as distinct steps.
 
-Note historique : un design antérieur prévoyait que les flèches naviguent
-dans le log de trajectoire avec doublons possibles. Ce comportement a été
-remplacé par le cycle bibliothèque parce qu'il colle mieux au modèle
-mental « un preset = un point unique sur la carte ».
+Historical note: an earlier design had the arrows navigate
+in the trajectory log with possible duplicates. This behavior was
+replaced by the library cycle because it better matches the
+mental model "one preset = one unique point on the map".
 
-### Commit de geste depuis cursor détaché
+### Gesture commit from detached cursor
 
-Soit cursor à l'index $k < h$ au moment où l'utilisateur produit une modification $c_{\text{new}}$.
+Let cursor be at index $k < h$ at the moment when the user produces a modification $c_{\text{new}}$.
 
-**Le chemin de retour vers HEAD est appendé**, suivi de la modification :
+**The return path to HEAD is appended**, followed by the modification:
 
 $$L' = [e_0, \dots, e_h, e_{h-1}, e_{h-2}, \dots, e_k, e_{\text{new}}]$$
 
-où les événements appendés portent le timestamp courant (ce sont de **nouveaux événements**, même s'ils réutilisent les configurations historiques).
+where the appended events carry the current timestamp (these are **new events**, even if they reuse the historical configurations).
 
-Après quoi :
+After which:
 
-- HEAD devient le nouvel index (l'indice de $e_{\text{new}}$)
-- Cursor s'aligne sur HEAD
-- Aucune donnée n'est perdue ; la trajectoire enregistre le détour réel
+- HEAD becomes the new index (the index of $e_{\text{new}}$)
+- Cursor aligns on HEAD
+- No data is lost; the trajectory records the actual detour
 
-### Mémorisation (promotion trajectoire → bibliothèque)
+### Memoisation (trajectory → library promotion)
 
-Un événement de trajectoire est **promu** dans la bibliothèque workspace si simultanément :
+A trajectory event is **promoted** into the workspace library if simultaneously:
 
-1. Il s'est écoulé $\geq X$ secondes depuis son commit sans nouveau geste
-2. La lecture audio est active pendant ce dwell
-3. L'effet n'est pas bypassé
+1. $\geq X$ seconds have elapsed since its commit without a new gesture
+2. Audio playback is active during this dwell
+3. The effect is not bypassed
 
-La promotion crée ou met à jour un preset dans la bibliothèque.
+Promotion creates or updates a preset in the library.
 
-Si un preset de même $(\text{uiHash}, c)$ existe déjà :
+If a preset with the same $(\text{uiHash}, c)$ already exists:
 
-- `firstSeenAt` reste inchangé
-- `lastSeenAt` est mis à jour à l'instant de promotion
-- L'entrée remonte dans l'ordre chronologique par `lastSeenAt`
+- `firstSeenAt` remains unchanged
+- `lastSeenAt` is updated to the moment of promotion
+- The entry moves up in the chronological order by `lastSeenAt`
 
-### Rappel d'un preset
+### Preset recall
 
-Rappeler un preset $(h, c^*)$ depuis la bibliothèque applique $c^*$ comme une modification standard :
+Recalling a preset $(h, c^*)$ from the library applies $c^*$ as a standard modification:
 
-- Équivalent à un commit de geste vers $c^*$
-- Si cursor était détaché, le chemin de retour est appendé avant le rappel (règle de modification depuis cursor détaché)
-- Le rappel n'ajoute pas d'entrée à la bibliothèque (sauf si dwell > $X$ après le rappel)
+- Equivalent to a gesture commit toward $c^*$
+- If cursor was detached, the return path is appended before the recall (modification-from-detached-cursor rule)
+- The recall does not add an entry to the library (unless dwell > $X$ after the recall)
 
-## Visualisation niveau 0 : orbit-ui des paramètres
+## Level-0 visualisation: parameter orbit-ui
 
-Le niveau 0 est l'UI orbit-ui existante : chaque paramètre $p_i$ du DSP est représenté par un point dans un canvas 2D. La position du point encode la valeur courante $v_i$ par la distance au centre. L'utilisateur pilote les valeurs en déplaçant le centre (tous les paramètres évoluent) ou en déplaçant un paramètre individuellement (une seule valeur change).
+Level 0 is the existing orbit-ui UI: each parameter $p_i$ of the DSP is represented by a point in a 2D canvas. The point's position encodes the current value $v_i$ via the distance to the center. The user drives the values by moving the center (all parameters evolve) or by moving a parameter individually (a single value changes).
 
-### Invariant de source de vérité
+### Source-of-truth invariant
 
-Les **valeurs des paramètres** $v_i$ sont l'état canonique. Les **positions** $\text{pos}_i$ dans le canvas sont un encodage visuel dérivé, maintenu cohérent avec les valeurs à tout instant.
+The **parameter values** $v_i$ are the canonical state. The **positions** $\text{pos}_i$ in the canvas are a derived visual encoding, kept consistent with the values at all times.
 
-Formellement, à tout instant :
+Formally, at any instant:
 
 $$v_i = \Phi\bigl(|C - \text{pos}_i|,\ \min_i,\ \max_i,\ r_{\text{inner}},\ r_{\text{outer}}\bigr)$$
 
-où $\Phi$ encode la distance en valeur :
+where $\Phi$ encodes distance into value:
 
-- distance $\leq r_{\text{inner}}$ → $\max_i$ (saturé haut)
-- distance $\geq r_{\text{outer}}$ → $\min_i$ (saturé bas)
-- sinon → interpolation linéaire entre $\min_i$ et $\max_i$ sur $[r_{\text{inner}}, r_{\text{outer}}]$
+- distance $\leq r_{\text{inner}}$ → $\max_i$ (saturated high)
+- distance $\geq r_{\text{outer}}$ → $\min_i$ (saturated low)
+- otherwise → linear interpolation between $\min_i$ and $\max_i$ over $[r_{\text{inner}}, r_{\text{outer}}]$
 
-### Règle de mouvement minimal
+### Minimal-movement rule
 
-Quand une valeur $v_i$ change par source externe (slider du detail panel, écriture Shepard niveau 1), la position $\text{pos}_i$ ne se met à jour **que si elle n'encode plus la valeur dans la tolérance du pas** ($\text{step}_i / 2$). Si la position courante produit déjà la nouvelle valeur via $\Phi$ — cas typique en zone saturée haut ou bas — aucun mouvement.
+When a value $v_i$ changes from an external source (detail panel slider, level-1 Shepard write), the position $\text{pos}_i$ is updated **only if it no longer encodes the value within the step tolerance** ($\text{step}_i / 2$). If the current position already produces the new value via $\Phi$ — typical case in the high or low saturated zone — no movement.
 
-Cela évite le jitter visuel dans les zones où de petites variations de valeur ne sont pas résolvables par un changement de position.
+This avoids visual jitter in zones where small variations of value are not resolvable by a position change.
 
-### Préservation de l'angle
+### Angle preservation
 
-Quand une position doit bouger pour encoder une nouvelle valeur, elle **glisse le long du rayon** passant par le centre et la position courante. Seule la distance radiale change ; l'angle par rapport au centre est préservé.
+When a position must move to encode a new value, it **slides along the radius** passing through the center and the current position. Only the radial distance changes; the angle relative to the center is preserved.
 
-Chaque paramètre garde ainsi une **identité directionnelle stable** dans le canvas au fil des évolutions.
+Each parameter thus keeps a **stable directional identity** in the canvas across evolutions.
 
-### Actions utilisateur au niveau 0
+### User actions at level 0
 
-| Action | Effet |
+| Action | Effect |
 | --- | --- |
-| Drag du centre $C$ | Recalcul de toutes les valeurs $v_i$ via $\Phi$ avec le nouveau $C$ et les positions actuelles. Les positions suivent au minimum nécessaire (règle de mouvement minimal). |
-| Drag d'une position $\text{pos}_i$ | Recalcul de $v_i$ via $\Phi$ à la nouvelle distance. |
-| Drag d'un slider externe | Nouvelle $v_i$ fixée directement. $\text{pos}_i$ glisse le long du rayon si sa position courante n'encode plus la valeur. |
-| Écriture externe (ex. Shepard niveau 1) | Nouvelles $v_i$ écrites. Positions réajustées au minimum via la règle. |
-| Click sur le badge de compteur de presets | Ouvre le **menu de rappel niveau 0** (cf. ci-dessous). |
+| Drag of the center $C$ | Recomputation of all values $v_i$ via $\Phi$ with the new $C$ and current positions. Positions follow with the minimum necessary (minimal-movement rule). |
+| Drag of a position $\text{pos}_i$ | Recomputation of $v_i$ via $\Phi$ at the new distance. |
+| Drag of an external slider | New $v_i$ set directly. $\text{pos}_i$ slides along the radius if its current position no longer encodes the value. |
+| External write (e.g. level-1 Shepard) | New $v_i$ written. Positions readjusted to the minimum via the rule. |
+| Click on the preset counter badge | Opens the **level-0 recall menu** (cf. below). |
 
-### Menu de rappel niveau 0
+### Level-0 recall menu
 
-Affordance complémentaire au calque : un dropdown ancré sous le badge de compteur de presets dans le header de l'effet, qui surface uniquement les **presets nommés** par l'utilisateur. Cliquer sur un item rappelle ce preset comme un commit de geste (équivalent à `ψ(\pi(c^*))` exactement sur le preset). Les presets auto-promus sans nom n'apparaissent pas — ils restent accessibles via le calque.
+Affordance complementary to the calque: a dropdown anchored under the preset counter badge in the effect header, which surfaces only the **user-named presets**. Clicking on an item recalls that preset as a gesture commit (equivalent to `ψ(\pi(c^*))` exactly on the preset). Auto-promoted presets without a name do not appear — they remain accessible via the calque.
 
-- **Tri** : alphabétique sur le nom (insensible à la casse et aux accents). Stable d'une ouverture à l'autre.
-- **État courant** : l'item dont le `configHash` correspond exactement à la configuration audible courante reçoit un check (`✓`). Au moindre changement de paramètre, plus aucun item n'est marqué.
-- **État vide** : si la bibliothèque ne contient aucun preset nommé, le menu affiche « No named presets ». Le badge reste cliquable pour signaler la cohabitation des deux types (auto-promus et nommés).
-- **Fermeture** : click ailleurs, Escape, scroll. Click sur un item ferme le menu et déclenche le rappel.
+- **Sort**: alphabetical by name (case- and accent-insensitive). Stable from one opening to the next.
+- **Current state**: the item whose `configHash` matches exactly the current audible configuration receives a check (`✓`). At the slightest parameter change, no item is marked anymore.
+- **Empty state**: if the library contains no named preset, the menu displays "No named presets". The badge remains clickable to signal the cohabitation of the two types (auto-promoted and named).
+- **Closure**: click elsewhere, Escape, scroll. Click on an item closes the menu and triggers the recall.
 
-## Visualisation niveau 1 : orbit-ui des presets (calque)
+## Level-1 visualisation: preset orbit-ui (calque)
 
-Le niveau 1 est un **calque semi-transparent superposé au niveau 0**. Il ajoute une seconde orbit-ui qui opère sur les presets de la bibliothèque, non plus sur les paramètres individuels.
+Level 1 is a **semi-transparent calque overlaid on level 0**. It adds a second orbit-ui that operates on the library presets, no longer on individual parameters.
 
-### Cohabitation des deux niveaux
+### Cohabitation of the two levels
 
-Quand le calque est actif :
+When the calque is active:
 
-- Les éléments du niveau 0 (paramètres + centre $C$) restent **visibles par transparence** pour préserver le contexte visuel.
-- Les éléments du niveau 0 ne sont **plus interactifs** : le drag du centre niveau 0 et le drag des positions des paramètres sont désactivés.
-- Le centre niveau 0 reste **figé à la position canvas center** (il n'a pas de rôle sémantique actif pendant l'overlay).
-- Le calque niveau 1 (presets, trajectoire, HEAD, cursor, centre niveau 1) est dessiné par-dessus avec pleine opacité.
-- Les valeurs des paramètres sont écrites par $\psi(\text{center}_1)$ — cf. invariant de source de vérité du niveau 0.
+- The level-0 elements (parameters + center $C$) remain **visible by transparency** to preserve the visual context.
+- The level-0 elements are **no longer interactive**: drag of the level-0 center and drag of parameter positions are disabled.
+- The level-0 center remains **frozen at the canvas center position** (it has no active semantic role during the overlay).
+- The level-1 calque (presets, trajectory, HEAD, cursor, level-1 center) is drawn on top with full opacity.
+- The parameter values are written by $\psi(\text{center}_1)$ — cf. level-0 source-of-truth invariant.
 
-### Toggle sans saut
+### Jumpless toggle
 
-Au toggle-off du calque, la configuration $(\text{valeurs des paramètres})$ reste celle qu'écrivait Shepard au dernier instant. Les positions niveau 0 sont déjà cohérentes avec ces valeurs (maintenues en continu par la règle de mouvement minimal). Le centre niveau 0 est au canvas center.
+On toggle-off of the calque, the configuration $(\text{parameter values})$ remains the one Shepard was writing at the last instant. The level-0 positions are already consistent with these values (continuously maintained by the minimal-movement rule). The level-0 center is at the canvas center.
 
-**Conséquence** : aucun saut audible ni visuel au moment du toggle. Le prochain drag du centre niveau 0 applique $\Phi$ à partir de cet état cohérent, produisant de nouvelles valeurs de manière continue depuis là où Shepard les a laissées.
+**Consequence**: no audible nor visual jump at the moment of the toggle. The next drag of the level-0 center applies $\Phi$ from this consistent state, producing new values continuously from where Shepard left them.
 
 ### Projection $\pi : E \to \mathbb{R}^2$
 
-$\pi$ est construite par **PCA pondérée** sur l'ensemble des presets mémorisés pour un $\text{uiHash}$ donné :
+$\pi$ is built by **weighted PCA** on the set of memoised presets for a given $\text{uiHash}$:
 
-- Entrée : presets $\{c_1, \dots, c_k\} \subset E$ avec poids $w_i$ décroissant avec l'ancienneté de `lastSeenAt`
-- Sortie : deux vecteurs directionnels $u_1, u_2 \in E$ + centroïde pondéré $\bar{c}$
-- Position 2D du preset $c_i$ : $p_i = \bigl(\langle c_i - \bar{c}, u_1 \rangle, \langle c_i - \bar{c}, u_2 \rangle\bigr)$
+- Input: presets $\{c_1, \dots, c_k\} \subset E$ with weights $w_i$ decreasing with the age of `lastSeenAt`
+- Output: two directional vectors $u_1, u_2 \in E$ + weighted centroid $\bar{c}$
+- 2D position of preset $c_i$: $p_i = \bigl(\langle c_i - \bar{c}, u_1 \rangle, \langle c_i - \bar{c}, u_2 \rangle\bigr)$
 
-La projection évolue quand le dataset change : ajouter un preset peut réorienter les axes. C'est un **aspect d'apprentissage** : plus la bibliothèque grandit, plus la projection reflète les choix réellement explorés.
+The projection evolves when the dataset changes: adding a preset can reorient the axes. This is a **learning aspect**: the more the library grows, the more the projection reflects the choices actually explored.
 
-### Inverse $\psi : \mathbb{R}^2 \to E$ par Shepard non borné
+### Inverse $\psi : \mathbb{R}^2 \to E$ by unbounded Shepard
 
-Pour une position de centre $(x, y)$ dans le canvas, la configuration correspondante est calculée par interpolation pondérée inverse-distance (Shepard) sur **tous** les presets :
+For a center position $(x, y)$ in the canvas, the corresponding configuration is computed by inverse-distance weighted (Shepard) interpolation over **all** presets:
 
-Soit $d_i = \|(x, y) - p_i\|$ pour chaque preset, et soit $w_i = d_i^{-p}$ le poids brut (avec $p = 2$ par défaut).
+Let $d_i = \|(x, y) - p_i\|$ for each preset, and let $w_i = d_i^{-p}$ be the raw weight (with $p = 2$ by default).
 
 $$\psi(x, y) = \sum_i \tilde{w}_i \cdot c_i, \qquad \tilde{w}_i = \frac{w_i}{\sum_j w_j}$$
 
-Les contributions normalisées $\tilde{w}_i \in [0, 1]$ somment à 1 et représentent la part de chaque preset dans la configuration courante.
+The normalised contributions $\tilde{w}_i \in [0, 1]$ sum to 1 and represent the share of each preset in the current configuration.
 
-- **Continuité** : pas de seuil, pas de zone « hors influence ». $\psi$ est continue partout sur $\mathbb{R}^2$ — quand la croix se rapproche d'un preset, son $\tilde{w}_i$ croît continûment vers 1, les autres décroissent vers 0.
-- **Cas-limite** $d_i = 0$ : $w_i \to \infty$. Numériquement on court-circuite au snap exact $\psi(x, y) = c_i$ pour éviter $\infty/\infty$.
+- **Continuity**: no threshold, no "out-of-influence" zone. $\psi$ is continuous everywhere on $\mathbb{R}^2$ — when the cross approaches a preset, its $\tilde{w}_i$ continuously grows toward 1, the others decrease toward 0.
+- **Edge case** $d_i = 0$: $w_i \to \infty$. Numerically we short-circuit to the exact snap $\psi(x, y) = c_i$ to avoid $\infty/\infty$.
 
-Choix de design (vs portée bornée historique) : $r_{\text{inner}}, r_{\text{outer}}$ ont été retirés. La version bornée introduisait des sauts visibles à la frontière $r_{\text{outer}}$ quand un preset entrait/sortait de l'ensemble actif ; le Shepard non borné supprime ces ruptures et la « zone défaut hors d'atteinte » au prix d'un calcul sur tous les presets à chaque frame, négligeable pour les tailles de bibliothèque attendues.
+Design choice (vs historical bounded reach): $r_{\text{inner}}, r_{\text{outer}}$ have been removed. The bounded version introduced visible jumps at the $r_{\text{outer}}$ boundary when a preset entered/exited the active set; unbounded Shepard removes these breaks and the "out-of-reach default zone" at the cost of a computation over all presets at each frame, negligible for the expected library sizes.
 
-### Éléments visuels
+### Visual elements
 
-Le canvas contient simultanément :
+The canvas simultaneously contains:
 
-- **Les presets** comme **disques roses uniformes** portant chacun leur
-  numéro (1-based) dans l'ordre `lastSeenAt` — la couleur n'encode pas
-  l'identité du preset, le numéro suffit. Couleur réservée pour des
-  extensions futures.
-- **Anneau ambre** autour de chaque preset **sélectionné** (cf. §Sélection
-  multi).
-- **Centre niveau 1** comme croix manipulable dont la position détermine
-  $\psi(\text{center})$ appliquée en temps réel.
-- **Arc blanc** sur l'anneau de chaque preset, dont la longueur encode la
-  contribution Shepard normalisée $\tilde{w}_i$ — le user voit en direct
-  comment la croix est interpolée.
-- **Spread visuel** : quand plusieurs presets se projettent à la même
-  position PCA (clusters de configurations très proches), leurs disques
-  sont écartés sur un petit cercle autour du centroïde du cluster pour
-  rester visibles individuellement. Le spread est **purement visuel** ;
-  les distances Shepard restent calculées dans l'espace de projection
-  d'origine, donc le comportement audio reflète les vraies distances.
+- **The presets** as **uniform pink discs** each carrying their
+  number (1-based) in the `lastSeenAt` order — the color does not encode
+  the preset's identity, the number suffices. Color reserved for
+  future extensions.
+- **Amber ring** around each **selected** preset (cf. §Multi-selection).
+- **Level-1 center** as a manipulable cross whose position determines
+  $\psi(\text{center})$ applied in real time.
+- **White arc** on the ring of each preset, whose length encodes the
+  normalised Shepard contribution $\tilde{w}_i$ — the user sees live
+  how the cross is interpolated.
+- **Visual spread**: when several presets project to the same
+  PCA position (clusters of very close configurations), their discs
+  are spread on a small circle around the cluster centroid to
+  remain individually visible. The spread is **purely visual**;
+  the Shepard distances remain computed in the original projection
+  space, so the audio behavior reflects the true distances.
 
-La trajectoire (HEAD, cursor, polyligne d'événements) **n'est pas
-représentée** dans l'UI actuelle ; elle est conservée comme donnée
-interne (cf. §Cursor, §Commit depuis cursor détaché).
+The trajectory (HEAD, cursor, polyline of events) **is not
+represented** in the current UI; it is kept as internal data
+(cf. §Cursor, §Commit from detached cursor).
 
-### Sélection multi
+### Multi-selection
 
-Un sous-ensemble ordonné de presets, alimenté à la demande, sert de cible
-à deux opérations : **suppression en masse** et **mode boucle**. La
-sélection est un set ordonné (ordre d'insertion conservé) qui survit aux
-toggles d'overlay. Édition :
+An ordered subset of presets, populated on demand, serves as a target
+for two operations: **bulk deletion** and **loop mode**. The
+selection is an ordered set (insertion order preserved) that survives
+overlay toggles. Editing:
 
-- **Shift+click sur un preset** : toggle l'appartenance à la sélection.
-- **Shift+drag dans le vide** : trace un rectangle ; au relâchement, tous
-  les presets visibles dans le rectangle sont **ajoutés** (additif —
-  jamais retirés, pour ne pas perdre une sélection lentement construite).
-- **Trash** dans le header de l'effet : supprime tous les presets
-  sélectionnés de la bibliothèque (ne touche pas la trajectoire).
+- **Shift+click on a preset**: toggles its membership in the selection.
+- **Shift+drag in the empty space**: traces a rectangle; on release, all
+  presets visible in the rectangle are **added** (additive —
+  never removed, so as not to lose a slowly built selection).
+- **Trash** in the effect header: deletes all selected presets
+  from the library (does not touch the trajectory).
 
-### Interactions du canvas
+### Canvas interactions
 
-| Action UI | Sémantique |
+| UI action | Semantics |
 | --- | --- |
-| Drag du centre | Navigation continue dans $E$ via $\pi$ courante ; applique $\psi(\text{center})$ en temps réel |
-| ←/→ | Glissement portamento du centre vers le preset précédent / suivant en ordre `lastSeenAt`, cycle |
-| Shift+click sur un preset | Toggle de sa présence dans la sélection multi |
-| Shift+drag dans le vide | Rectangle de sélection ; ajout additif au relâchement |
-| Right-click sur la croix → « Add preset » | Mémorise la configuration courante $\psi(\text{centre})$ comme nouveau preset, ancré à la position visuelle de la croix |
-| Right-click sur un preset → « Rename… » | Ouvre l'éditeur inline pour renommer le preset |
-| Right-click sur un preset → « Delete » | Supprime le preset (confirmation si nommé) |
-| Double-click sur un preset | Raccourci équivalent à « Rename… » |
-| ▶ / ■ (bottom bar) | Démarre / arrête le mode boucle sur la sélection courante |
+| Drag of the center | Continuous navigation in $E$ via current $\pi$; applies $\psi(\text{center})$ in real time |
+| ←/→ | Portamento glide of the center toward the previous / next preset in `lastSeenAt` order, cycle |
+| Shift+click on a preset | Toggles its presence in the multi-selection |
+| Shift+drag in the empty space | Selection rectangle; additive add on release |
+| Right-click on the cross → "Add preset" | Memoises the current configuration $\psi(\text{center})$ as a new preset, anchored to the visual position of the cross |
+| Right-click on a preset → "Rename…" | Opens the inline editor to rename the preset |
+| Right-click on a preset → "Delete" | Deletes the preset (confirmation if named) |
+| Double-click on a preset | Shortcut equivalent to "Rename…" |
+| ▶ / ■ (bottom bar) | Starts / stops loop mode on the current selection |
 
-### Pondération par récence
+### Recency weighting
 
-Les poids $w_i$ suivent une décroissance exponentielle :
+The weights $w_i$ follow an exponential decay:
 
 $$w_i = \exp\bigl(-\lambda \cdot (t_{\text{now}} - t_{\text{lastSeen}, i})\bigr)$$
 
-$\lambda$ est un paramètre de « mémoire » à calibrer. Cible MVP : un preset vieux d'une semaine pèse moitié moins qu'un preset frais ($\lambda = \ln 2 / (7 \text{ jours})$).
+$\lambda$ is a "memory" parameter to be calibrated. MVP target: a one-week-old preset weighs half as much as a fresh preset ($\lambda = \ln 2 / (7 \text{ days})$).
 
-### Cas dégénérés
+### Degenerate cases
 
-| Nombre de presets | Comportement |
+| Number of presets | Behavior |
 | --- | --- |
-| $k = 0$ | Canvas preset vide. Le mode preset-ui est désactivé ; l'utilisateur reste en orbit-ui de paramètres. |
-| $k = 1$ | Un seul point. Le canvas a une seule position utile ; snap systématique. |
-| $k = 2$ | PCA dégénère à une seule direction. Axe entre les deux points ; seconde dimension arbitraire. |
-| $k \geq 3$ | PCA pleine. |
+| $k = 0$ | Empty preset canvas. Preset-ui mode is disabled; the user remains in parameter orbit-ui. |
+| $k = 1$ | A single point. The canvas has a single useful position; systematic snap. |
+| $k = 2$ | PCA degenerates to a single direction. Axis between the two points; second dimension arbitrary. |
+| $k \geq 3$ | Full PCA. |
 
-## Transitions dynamiques
+## Dynamic transitions
 
-Jusqu'ici, tout mouvement dans $E$ est instantané (commit de geste, rappel de preset). Les **transitions dynamiques** ajoutent une dimension temporelle continue : on peut glisser progressivement d'une configuration à une autre en un temps donné, et chaîner ces glissements en boucle.
+Until now, every movement in $E$ is instantaneous (gesture commit, preset recall). **Dynamic transitions** add a continuous temporal dimension: one can progressively glide from one configuration to another over a given time, and chain these glides in a loop.
 
-### Deux paramètres utilisateur
+### Two user parameters
 
-- **Portamento time $T_p$** : durée d'une transition continue entre la configuration courante et la configuration cible. Notion familière des synthétiseurs.
-- **Durée de cycle $T_L$** : durée totale d'**un parcours complet** de la sélection en mode boucle (et non d'un pas individuel). Exposée à l'utilisateur en **BPM** sous l'hypothèse « 1 cycle = 1 mesure 4/4 », soit $T_L = 60{,}000 \cdot 4 / \text{BPM}$ ms. Ce mapping rend le tempo de la boucle stable face aux éditions à chaud de la sélection (cf. infra).
+- **Portamento time $T_p$**: duration of a continuous transition between the current configuration and the target configuration. Notion familiar from synthesisers.
+- **Cycle duration $T_L$**: total duration of **a complete traversal** of the selection in loop mode (and not of an individual step). Exposed to the user in **BPM** under the assumption "1 cycle = 1 measure 4/4", i.e. $T_L = 60{,}000 \cdot 4 / \text{BPM}$ ms. This mapping makes the loop tempo stable in the face of hot edits of the selection (cf. below).
 
-### Deux modes
+### Two modes
 
-**Mode suivi (one-shot).** Une transition unique de la configuration courante vers une cible $c^*$ en $T_p$ secondes. La configuration reste ensuite à $c^*$.
+**Follow mode (one-shot).** A unique transition from the current configuration to a target $c^*$ in $T_p$ seconds. The configuration then remains at $c^*$.
 
-**Mode boucle.** La **sélection multi** courante (cf. §Sélection multi)
-sert de liste : ses presets $[p_1, p_2, \dots, p_m]$, dans l'ordre
-d'insertion, sont parcourus en continu. La durée de cycle $T_L$ se
-répartit également entre les $m$ presets, chacun reçoit donc un pas
-$T_S = T_L / m$ structuré comme :
+**Loop mode.** The current **multi-selection** (cf. §Multi-selection)
+serves as a list: its presets $[p_1, p_2, \dots, p_m]$, in insertion
+order, are continuously traversed. The cycle duration $T_L$ is
+distributed equally among the $m$ presets, each therefore receives a step
+$T_S = T_L / m$ structured as:
 
-$$T_S = \underbrace{T_p}_{\text{glissement}} + \underbrace{\max(0,\ T_S - T_p)}_{\text{hold au preset}}$$
+$$T_S = \underbrace{T_p}_{\text{glide}} + \underbrace{\max(0,\ T_S - T_p)}_{\text{hold at the preset}}$$
 
-Si $T_p = T_S$, mouvement continu sans pause sur le preset. Si $T_p = 0$, sauts instantanés et hold complet sur chaque preset ($T_S$ par preset). Entre les deux, mix glissement + hold émergeant du différentiel.
+If $T_p = T_S$, continuous movement without pause on the preset. If $T_p = 0$, instantaneous jumps and full hold on each preset ($T_S$ per preset). In between, glide + hold mix emerging from the differential.
 
-Conséquence importante de ce modèle : **la durée de cycle reste fixe quelle que soit la taille de la sélection**. Ajouter ou retirer des presets pendant la boucle modifie la *densité* du contenu sans déplacer le tempo, comme remplir une mesure d'un séquenceur avec plus ou moins de notes.
+Important consequence of this model: **the cycle duration remains fixed regardless of the size of the selection**. Adding or removing presets during the loop modifies the *density* of content without moving the tempo, like filling a measure of a sequencer with more or fewer notes.
 
-Modes classiques subsumés par la boucle :
+Classic modes subsumed by the loop:
 
-- Élastique (A ↔ B, un aller-retour) = sélection `{A, B}` exécutée une itération
-- Oscillant (A ↔ B en continu) = sélection `{A, B}` en continu
+- Elastic (A ↔ B, one round trip) = selection `{A, B}` executed for one iteration
+- Oscillating (A ↔ B continuously) = selection `{A, B}` continuously
 
-**Édition à chaud.** La sélection est modifiable pendant la boucle (via
-shift+click ou rectangle). Le prochain pas lit la sélection courante :
-ajouter un preset l'insère en queue, retirer un preset le saute. La
-structure rythmique change immédiatement.
+**Hot editing.** The selection is modifiable during the loop (via
+shift+click or rectangle). The next step reads the current selection:
+adding a preset inserts it at the tail, removing a preset skips it. The
+rhythmic structure changes immediately.
 
-### Géométrie du chemin
+### Path geometry
 
-La configuration intermédiaire pendant une transition se calcule selon le niveau choisi :
+The intermediate configuration during a transition is computed according to the chosen level:
 
-- **Niveau 0 (paramètres bruts)** : interpolation linéaire composante-par-composante.
+- **Level 0 (raw parameters)**: component-by-component linear interpolation.
   $$c(t) = (1 - \alpha(t)) \cdot c_{\text{start}} + \alpha(t) \cdot c_{\text{target}}$$
-  avec $\alpha : [0, T_p] \to [0, 1]$ linéaire par défaut ($\alpha(t) = t / T_p$).
-- **Niveau 1 (canvas preset-ui)** : le centre glisse en ligne droite dans le canvas 2D de $\pi(c_{\text{start}})$ vers $\pi(c_{\text{target}})$. La configuration intermédiaire est $\psi(\text{center}(t))$. Le chemin dans $E$ peut alors être non-linéaire, passant par les zones d'influence des presets intermédiaires via Shepard.
+  with $\alpha : [0, T_p] \to [0, 1]$ linear by default ($\alpha(t) = t / T_p$).
+- **Level 1 (preset-ui canvas)**: the center glides in a straight line in the 2D canvas from $\pi(c_{\text{start}})$ toward $\pi(c_{\text{target}})$. The intermediate configuration is $\psi(\text{center}(t))$. The path in $E$ can then be non-linear, passing through the influence zones of intermediate presets via Shepard.
 
 ### Interruption
 
-Si une nouvelle transition est demandée pendant qu'une est en cours, la nouvelle **part de la configuration interpolée courante** (remplacement, pas file d'attente).
+If a new transition is requested while one is in progress, the new one **starts from the current interpolated configuration** (replacement, not queue).
 
-### Contrainte
+### Constraint
 
-En mode boucle : $T_p \leq T_S = T_L / m$, soit $m \cdot T_p \leq T_L$ (la transition doit finir avant le prochain déclenchement). Le moteur d'exécution applique un floor : si la valeur courante de $T_p$ excède $T_L / m$, le pas effectif est étiré à $T_p$ et le cycle audible devient plus long que ce que le slider tempo affiche. L'UI ne clampe pas activement les sliders ; c'est à l'utilisateur d'ajuster Tp ou de réduire la sélection s'il veut respecter exactement le BPM affiché.
+In loop mode: $T_p \leq T_S = T_L / m$, i.e. $m \cdot T_p \leq T_L$ (the transition must finish before the next trigger). The execution engine applies a floor: if the current value of $T_p$ exceeds $T_L / m$, the effective step is stretched to $T_p$ and the audible cycle becomes longer than what the tempo slider displays. The UI does not actively clamp the sliders; it is up to the user to adjust Tp or reduce the selection if they want to exactly respect the displayed BPM.
 
-### Limitation connue : étranglement du timer en onglet d'arrière-plan
+### Known limitation: timer throttling in background tabs
 
-Le pilotage du glissement de la croix et du hold en mode boucle repose sur `requestAnimationFrame` côté thread principal. Or les navigateurs (Chrome notamment) **étranglent rAF et `setTimeout` à environ 1 Hz pour les onglets non-foreground** afin d'économiser CPU et batterie. Conséquence pratique : quand l'onglet du DAW passe en arrière-plan pendant qu'une boucle tourne, on n'obtient plus que ~1 mise à jour audio par seconde, le glissement Shepard intermédiaire n'est plus calculé, et la boucle audible se réduit à des **sauts discrets de preset à preset**. Le timing global du cycle reste à peu près correct (`performance.now()` n'est pas étranglé) mais la continuité $\psi$ est perdue.
+The driving of the cross glide and of the hold in loop mode relies on `requestAnimationFrame` on the main thread side. Now browsers (Chrome notably) **throttle rAF and `setTimeout` to about 1 Hz for non-foreground tabs** in order to save CPU and battery. Practical consequence: when the DAW tab goes to the background while a loop is running, one only gets ~1 audio update per second, the intermediate Shepard glide is no longer computed, and the audible loop reduces to **discrete jumps from preset to preset**. The global cycle timing remains roughly correct (`performance.now()` is not throttled) but the $\psi$ continuity is lost.
 
-Le moteur Web Audio, lui, tourne sur un thread temps-réel non étranglé : le son lui-même ne se coupe pas, c'est uniquement la chaîne JS qui pilote `apply(config)` qui souffre. **Détacher l'onglet en fenêtre autonome** (ou utiliser une PWA standalone) suffit à le sortir de la catégorie « onglet d'arrière-plan » et restaure le comportement nominal.
+The Web Audio engine itself runs on a non-throttled real-time thread: the sound itself does not cut off, it is only the JS chain driving `apply(config)` that suffers. **Detaching the tab into a standalone window** (or using a standalone PWA) suffices to take it out of the "background tab" category and restores nominal behavior.
 
-Solution propre future : déplacer l'horloge de référence de la boucle sur `audioContext.currentTime` (planification via `setValueAtTime` / `linearRampToValueAtTime`), ou installer un `AudioWorkletNode` minimal qui poste un tick au main thread tous les ~33 ms — ces postMessages ne sont pas étranglés tant que l'audio est actif.
+Clean future solution: move the loop's reference clock to `audioContext.currentTime` (scheduling via `setValueAtTime` / `linearRampToValueAtTime`), or install a minimal `AudioWorkletNode` that posts a tick to the main thread every ~33 ms — these postMessages are not throttled as long as audio is active.
 
-### Trace dans le log de trajectoire
+### Trace in the trajectory log
 
-Une transition produit **un seul événement de trajectoire** au target, avec metadata :
+A transition produces **a single trajectory event** at the target, with metadata:
 
 - `transitionTime` = $T_p$
-- `transitionLevel` = `0` (niveau paramètres) ou `1` (niveau canvas)
-- `loopContext` = identifiant de la boucle si applicable
+- `transitionLevel` = `0` (parameter level) or `1` (canvas level)
+- `loopContext` = identifier of the loop if applicable
 
-Le log reste discret. La continuité audible est un phénomène transitoire, non historiquement tracé. Si l'utilisateur interrompt une transition avant qu'elle ne termine et commence une nouvelle, l'ancienne cible n'est jamais loggée.
+The log remains discrete. The audible continuity is a transient phenomenon, not historically traced. If the user interrupts a transition before it ends and starts a new one, the old target is never logged.
 
 ## Invariants
 
-### Totalité
+### Totality
 
-Une configuration est un mapping **total** sur $P$. Pas de preset partiel.
+A configuration is a **total** mapping over $P$. No partial preset.
 
-### Légitimité
+### Legitimacy
 
-$c(p_i) \in D(p_i)$ pour tout paramètre. Pas de valeur hors domaine.
+$c(p_i) \in D(p_i)$ for every parameter. No value out of domain.
 
-### Cohérence avec la signature paramètres
+### Consistency with the parameter signature
 
-Un preset est lié à un $\text{uiHash}$ précis — la signature de l'interface paramètres du DSP ($\{(path, type, min, max, step)\}$). Tant que la signature est inchangée, le preset reste valide même si la source DSP a évolué (refactor, fix de bug, commentaire, etc.). Si la signature change (paramètre ajouté, retiré, plage modifiée), le preset est attaché à un autre $\text{uiHash}$ et n'est plus visible depuis le nouveau code. Pas de migration implicite. Le $\text{codeHash}$ — hash de la source — reste utilisé séparément par la trajectoire pour signaler qu'une recompilation invalide la trajectoire courante.
+A preset is bound to a precise $\text{uiHash}$ — the signature of the DSP's parameter interface ($\{(path, type, min, max, step)\}$). As long as the signature is unchanged, the preset remains valid even if the DSP source has evolved (refactor, bug fix, comment, etc.). If the signature changes (parameter added, removed, range modified), the preset is attached to another $\text{uiHash}$ and is no longer visible from the new code. No implicit migration. The $\text{codeHash}$ — hash of the source — remains used separately by the trajectory to signal that a recompilation invalidates the current trajectory.
 
-### Unicité du default
+### Default uniqueness
 
-Une unique configuration par défaut par $\text{uiHash}$, dérivée des descripteurs. Pas stockée comme preset ordinaire.
+A unique default configuration per $\text{uiHash}$, derived from the descriptors. Not stored as an ordinary preset.
 
-### Linéarité de la trajectoire
+### Trajectory linearity
 
-Le log est une séquence linéaire. Aucun branchement, aucun arbre.
+The log is a linear sequence. No branching, no tree.
 
-### Non-destructivité
+### Non-destructiveness
 
-Ni la navigation (cursor) ni la modification depuis cursor détaché ne suppriment d'événements. La seule cause de perte est l'éviction FIFO au-delà de la capacité.
+Neither navigation (cursor) nor modification from a detached cursor deletes events. The only cause of loss is FIFO eviction beyond capacity.
 
-### Croissance monotone de la bibliothèque
+### Library monotonic growth
 
-Tant qu'une session $S$ vit, la bibliothèque vue depuis $S$ ne perd jamais d'entrée ; elle ne peut que gagner. Le workspace est l'union des bibliothèques des sessions vivantes.
+As long as a session $S$ lives, the library viewed from $S$ never loses an entry; it can only gain. The workspace is the union of the libraries of the live sessions.
 
-### Déterminisme du rappel
+### Recall determinism
 
-Rappeler deux fois le même preset applique deux fois la même configuration.
+Recalling the same preset twice applies the same configuration twice.
 
-### Idempotence du snap
+### Snap idempotence
 
-Quand le centre du canvas 2D est exactement à la position $p_i$ d'un
-preset (distance nulle), alors $\psi(\text{center}) = c_i$ exactement. Pas
-d'approximation par interpolation aux points des presets. Cet invariant
-est garanti numériquement par le court-circuit Shepard à $d = 0$ ; il n'y
-a plus de zone $r_{\text{inner}}$ — la transition est continue partout
-ailleurs.
+When the center of the 2D canvas is exactly at the position $p_i$ of a
+preset (zero distance), then $\psi(\text{center}) = c_i$ exactly. No
+approximation by interpolation at the preset points. This invariant
+is guaranteed numerically by the Shepard short-circuit at $d = 0$; there
+is no longer an $r_{\text{inner}}$ zone — the transition is continuous everywhere
+else.
 
-### Source de vérité unique
+### Single source of truth
 
-Les **valeurs des paramètres** sont la source de vérité pour toute l'UI. Les niveaux 0 (orbit-ui paramètres) et 1 (orbit-ui preset) lisent et écrivent toutes les deux dans cette source partagée. Les positions visuelles des deux niveaux (paramètres pour le niveau 0, centre $C$ pour les deux niveaux) sont des dérivées maintenues cohérentes. Corollaire direct : le toggle d'un calque n'introduit aucune discontinuité, parce qu'il ne déplace pas la source de vérité.
+The **parameter values** are the source of truth for the entire UI. Levels 0 (parameter orbit-ui) and 1 (preset orbit-ui) both read and write into this shared source. The visual positions of both levels (parameters for level 0, center $C$ for both levels) are derived quantities kept consistent. Direct corollary: toggling a calque introduces no discontinuity, because it does not move the source of truth.
 
-### Dérivation complète du layout niveau 1
+### Full derivation of the level-1 layout
 
-Le layout du calque niveau 1 — positions 2D des presets, axes de la projection — est **entièrement dérivé** de la bibliothèque courante via la PCA pondérée. Pas d'ajustement manuel, pas d'état caché, pas de persistance séparée. Quand la bibliothèque évolue (nouveaux presets, `lastSeenAt` mis à jour), le layout se recalcule.
+The layout of the level-1 calque — 2D positions of the presets, projection axes — is **entirely derived** from the current library via the weighted PCA. No manual adjustment, no hidden state, no separate persistence. When the library evolves (new presets, `lastSeenAt` updated), the layout recomputes.
 
-Conséquence : la carte reflète toujours l'état actuel des données, et deux utilisateurs (ou le même à deux moments) ayant la même bibliothèque ont la même carte.
+Consequence: the map always reflects the current state of the data, and two users (or the same one at two moments) having the same library have the same map.
 
-## Trois concerns : résumé MVP
+## Three concerns : MVP summary
 
-| Concern | Choix MVP |
+| Concern | MVP choice |
 |---|---|
-| **Production** (trajectoire) | Append au log à chaque commit de geste |
-| **Production** (bibliothèque) | Promotion automatique après $X$ secondes de dwell en playback actif, effet non bypassé. Suspendue tant que le calque niveau 1 est ouvert (l'utilisateur gère alors la bibliothèque à la main). |
-| **Production manuelle** | Right-click sur la croix → « Add preset » → sauvegarde de $\psi(\text{centre})$ comme preset, ancré à la position visuelle de la croix (ou bump du `lastSeenAt` si même contenu existe déjà). Un override d'ancrage **session-local** garantit que le nouveau disc apparaît exactement sous la croix, indépendamment de ce que la PCA aurait projeté pour cette config. |
-| **Nommage** | Optionnel et contrôlé par l'utilisateur : right-click sur un preset → « Rename… », ou double-click. Un preset sans nom n'a pas d'étiquette ; un preset nommé apparaît avec un disc doré et son nom s'affiche sous la croix quand celle-ci est exactement dessus. Plusieurs presets peuvent partager le même nom (collision admise). Vider le nom le supprime. |
-| **Navigation niveau 1** | ←/→ glissent le centre vers le preset précédent / suivant en ordre `lastSeenAt`, cyclique. Le cursor du log de trajectoire reste interne (utilisé seulement par le détour appendé sur commit détaché). |
-| **Sélection multi** | Set ordonné par insertion. Shift+click toggle ; shift+drag rectangle ajoute additivement |
-| **Suppression** | Trash dans le header de l'effet : supprime tous les presets sélectionnés. Active uniquement quand calque ouvert + sélection non vide |
-| **Rappel** | Deux chemins complémentaires : (a) centre niveau 1 + Shepard non borné — le calque expose toute la bibliothèque ; (b) menu de rappel niveau 0 dans le header de l'effet — dropdown des presets nommés uniquement, tri alphabétique stable, item courant marqué `✓`. |
-| **Dédup bibliothèque** | Par contenu. Revisite d'un preset existant met à jour `lastSeenAt` |
-| **Capacité trajectoire** | ≈ 500 événements par instance, éviction FIFO |
-| **Seuil de dwell $X$** | 3 secondes en première approximation, tunable |
-| **Projection 2D** (niveau preset) | PCA pondérée par récence ($\lambda = \ln 2 / 7\text{j}$), entièrement dérivée de la bibliothèque. Pas d'ajustement manuel. Cluster spread visuel pour les presets superposés. |
-| **Interpolation** (niveau preset) | Shepard non borné $p = 2$ : tous les presets contribuent toujours, contributions normalisées sommant à 1, snap exact au cas-limite $d = 0$ |
-| **Mode suivi** | Glissement avec $T_p$ secondes de portamento. $T_p = 0$ = saut instantané. Lancé par ←/→. |
-| **Mode boucle** | Sur la sélection multi (ordre d'insertion). Durée de cycle $T_L$ exposée en BPM (1 cycle = 1 mesure 4/4). Pas effectif $T_S = T_L / m$, contrainte $T_p \leq T_S$, édition à chaud (la sélection peut changer pendant la boucle, le tempo reste fixe). Bouton ▶/■ dans la bottom bar du calque. |
-| **Ease-in/out** | Linéaire par défaut ($\alpha(t) = t / T_p$). Courbes raffinées en post-MVP |
-| **Interruption** | Remplacement : la nouvelle transition part de la position interpolée courante |
+| **Production** (trajectory) | Append to the log at each gesture commit |
+| **Production** (library) | Automatic promotion after $X$ seconds of dwell during active playback, effect not bypassed. Suspended as long as the level-1 calque is open (the user then manages the library by hand). |
+| **Manual production** | Right-click on the cross → "Add preset" → save of $\psi(\text{center})$ as a preset, anchored to the visual position of the cross (or bump of `lastSeenAt` if the same content already exists). A **session-local** anchor override guarantees that the new disc appears exactly under the cross, independently of what the PCA would have projected for that config. |
+| **Naming** | Optional and controlled by the user: right-click on a preset → "Rename…", or double-click. A preset without a name has no label; a named preset appears with a golden disc and its name is displayed under the cross when it is exactly on it. Several presets can share the same name (collision admitted). Emptying the name deletes it. |
+| **Level-1 navigation** | ←/→ glide the center toward the previous / next preset in `lastSeenAt` order, cyclic. The trajectory log cursor remains internal (used only by the detour appended on detached commit). |
+| **Multi-selection** | Set ordered by insertion. Shift+click toggles; shift+drag rectangle adds additively |
+| **Deletion** | Trash in the effect header: deletes all selected presets. Active only when calque open + selection non-empty |
+| **Recall** | Two complementary paths: (a) level-1 center + unbounded Shepard — the calque exposes the entire library; (b) level-0 recall menu in the effect header — dropdown of named presets only, stable alphabetical sort, current item marked `✓`. |
+| **Library dedup** | By content. Revisit of an existing preset updates `lastSeenAt` |
+| **Trajectory capacity** | ≈ 500 events per instance, FIFO eviction |
+| **Dwell threshold $X$** | 3 seconds as a first approximation, tunable |
+| **2D projection** (preset level) | PCA weighted by recency ($\lambda = \ln 2 / 7\text{d}$), entirely derived from the library. No manual adjustment. Visual cluster spread for superposed presets. |
+| **Interpolation** (preset level) | Unbounded Shepard $p = 2$: all presets always contribute, normalised contributions summing to 1, exact snap at the edge case $d = 0$ |
+| **Follow mode** | Glide with $T_p$ seconds of portamento. $T_p = 0$ = instantaneous jump. Triggered by ←/→. |
+| **Loop mode** | On the multi-selection (insertion order). Cycle duration $T_L$ exposed in BPM (1 cycle = 1 measure 4/4). Effective step $T_S = T_L / m$, constraint $T_p \leq T_S$, hot editing (the selection can change during the loop, the tempo remains fixed). ▶/■ button in the calque's bottom bar. |
+| **Ease-in/out** | Linear by default ($\alpha(t) = t / T_p$). Refined curves in post-MVP |
+| **Interruption** | Replacement: the new transition starts from the current interpolated position |
 
-## Hors-scope de cette spec
+## Out of scope of this spec
 
-- **UI / feedback raffiné** : indicateur visuel du preset actif pendant
-  la cycle, mise en évidence du preset cible courant en mode boucle,
-  raccourcis clavier alternatifs.
-- **Pinning et organisation hiérarchique** : marquer certains presets comme favoris, les organiser en dossiers ou collections. Le renommage utilisateur, lui, est implémenté (cf. §Interactions du canvas et le tableau Trois concerns).
-- **Suppression d'événements de trajectoire** : la suppression de presets de la bibliothèque est implémentée (trash sur la sélection multi). La suppression manuelle d'événements individuels du log de trajectoire reste hors-scope.
-- **Compatibilité inter-codes** : détection de « presets proches » pour un code modifié, application avec dégradation contrôlée.
-- **Méta-niveau 2 (collections de presets)** : reconnu comme extension cohérente du niveau 1 mais explicitement repoussé. On gagne d'abord en expérience avec niveaux 0 (paramètres) et 1 (presets) avant de l'ajouter.
-- **Ease curves raffinés** : ease-in/out, exponentiel, enveloppes personnalisées. Linéaire par défaut dans le MVP.
-- **Synchronisation tempo** : verrouillage de $T_L$ sur la BPM du projet.
-- **Boucles multiples simultanées** : plusieurs boucles sur la même instance ou sur des instances différentes jouant de concert.
-- **Pilotage externe du centre** (MIDI / OSC / Web MIDI) : position $(x, y)$ du centre de chaque canvas comme variable observable et pilotable depuis l'extérieur (contrôleurs physiques, feedback inter-instances, enregistrement/rejeu en flux). Héritage conceptuel d'Interactors (Orlarey, années 1980), qui exposait toute commande en entrée et sortie MIDI.
-- **Sources de trajectoire procédurales** : DSL permettant de générer des chemins dans le canvas par description (équivalent moderne de la tortue Logo intégrée à Interactors par Stéphane Letz). La trajectoire devient un programme ; elle peut déclencher des transitions, composer avec les boucles de presets, ou générer des motifs géométriques dans l'espace des paramètres.
-- **Implémentation** : schéma IndexedDB, intégration avec l'autosave et l'undo projet, sérialisation des trajectoires dans les archives de session.
+- **Refined UI / feedback**: visual indicator of the active preset during
+  the cycle, highlighting of the current target preset in loop mode,
+  alternative keyboard shortcuts.
+- **Pinning and hierarchical organisation**: marking certain presets as favorites, organising them into folders or collections. User renaming, however, is implemented (cf. §Canvas interactions and the Three concerns table).
+- **Deletion of trajectory events**: deletion of presets from the library is implemented (trash on the multi-selection). Manual deletion of individual events from the trajectory log remains out of scope.
+- **Inter-code compatibility**: detection of "near presets" for a modified code, application with controlled degradation.
+- **Meta-level 2 (preset collections)**: recognised as a coherent extension of level 1 but explicitly postponed. We first gain experience with levels 0 (parameters) and 1 (presets) before adding it.
+- **Refined ease curves**: ease-in/out, exponential, custom envelopes. Linear by default in the MVP.
+- **Tempo synchronisation**: locking $T_L$ to the project BPM.
+- **Multiple simultaneous loops**: several loops on the same instance or on different instances playing in concert.
+- **External center driving** (MIDI / OSC / Web MIDI): position $(x, y)$ of the center of each canvas as an observable and drivable variable from the outside (physical controllers, inter-instance feedback, streaming recording/replay). Conceptual heritage from Interactors (Orlarey, 1980s), which exposed every command in MIDI input and output.
+- **Procedural trajectory sources**: DSL allowing the generation of paths in the canvas by description (modern equivalent of the Logo turtle integrated into Interactors by Stéphane Letz). The trajectory becomes a program; it can trigger transitions, compose with preset loops, or generate geometric patterns in the parameter space.
+- **Implementation**: IndexedDB schema, integration with project autosave and undo, serialisation of trajectories in session archives.
 
-Ces points seront traités séparément une fois le vocabulaire fixé.
+These points will be treated separately once the vocabulary is fixed.

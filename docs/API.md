@@ -1,86 +1,113 @@
-# API publique du composant Faust Orbit UI
+# Public API of the Faust Orbit UI component
 
-## Cadrage
+## Scope
 
-Ce document décrit l'**API publique** que le composant *Faust Orbit UI* expose à son hôte. Il est dérivé directement de [DATAMODEL.md](DATAMODEL.md) et applique strictement la frontière conceptuelle qui y est définie : le composant ne connaît du DSP Faust que sa signature paramètres.
+This document describes the **public API** that the *Faust Orbit UI* component exposes to its host. It is derived directly from [DATAMODEL.md](DATAMODEL.md) and strictly applies the conceptual boundary defined there: the only thing the component knows about the Faust DSP is its parameter signature.
 
-L'API est volontairement minimale et **synchrone**. Le composant n'a pas de notion de persistance : il démarre toujours avec un état vide, expose son `uiHash` calculé en interne, accepte des **setters** pour pousser l'état (initial après lecture du store, ou plus tard pour la sync cross-instance), émet des **events** quand son état change, et laisse l'hôte décider quoi en faire (persister, broadcaster, ignorer).
+The API is deliberately minimal and **synchronous**. The component has no notion of persistence: it always starts with an empty state, exposes its internally computed `uiHash`, accepts **setters** to push state in (initial state after reading from the store, or later for cross-instance sync), emits **events** when its state changes, and lets the host decide what to do with them (persist, broadcast, ignore).
 
-Le pattern est donc : **construction vide + setters pour pousser l'état + events sortants + setters pour sync entrante**. Pas d'adapter, pas de Promises, pas de subscribe / unsubscribe, pas d'utilitaire de hash exposé.
+The pattern is therefore: **empty construction + setters to push state + outgoing events + setters for incoming sync**. No adapter, no Promises, no subscribe / unsubscribe, no exposed hash utility.
 
-## Constructeur
+## Constructor
 
 ```typescript
 new OrbitUI(container: HTMLElement, options: OrbitUIOptions): OrbitUI;
 ```
 
-`container` est l'élément DOM qui héberge le composant. Le composant y crée son canvas, son header, son détail panel, et son calque.
+`container` is the DOM element that hosts the component. Since v0.4.0, the component **attaches a shadow root** to `container` and renders all of its DOM inside it (canvas, header, detail panel, calque, dropdowns). This isolation guarantees that the host's stylesheets do not affect the component's rendering, and vice versa.
 
-## Propriétés publiques
+The host can still interact with `container` from the outside:
+- the `.orbit-ui-root` class is added to the `container` at construction,
+- the `.orbit-ui-overlay-active` class is mirror-toggled on `container` when the calque opens / closes (so a Cmd+Z router can detect the state via `container.classList.contains('orbit-ui-overlay-active')` without having to penetrate the shadow).
+
+Visual theming now goes through **CSS custom properties** declared at the `:host` scope — see [Theming](#theming) below.
+
+## Public properties
 
 ```typescript
 class OrbitUI {
-  /** Hash de la signature UI, calculé par le composant à la construction.
-   *  L'hôte peut le lire pour keyer son store et pousser ensuite l'état
-   *  initial via les setters. */
+  /** Hash of the UI signature, computed by the component at construction.
+   *  The host can read it to key its store and then push the initial
+   *  state via the setters. */
   readonly uiHash: string;
 }
 ```
 
-L'algorithme de hash est exclusivement à l'intérieur du composant : pas d'utilitaire à exporter, pas de risque de divergence. L'hôte ne calcule rien — il lit `orbit.uiHash` après la construction.
+The hash algorithm lives exclusively inside the component: no utility to export, no risk of divergence. The host computes nothing — it reads `orbit.uiHash` after construction.
 
-## Options de construction
+## Construction options
 
 ```typescript
 type OrbitUIOptions = {
-  /** Descripteur UI Faust parsé. Source de vérité pour la signature paramètres. */
+  /** Parsed Faust UI descriptor. Source of truth for the parameter signature. */
   uiDescriptor: FaustUIDescriptor;
 
-  /** Notifié à chaque changement de paramètre déclenché par l'utilisateur
-   *  (drag d'un knob, recall d'un preset, etc.). L'hôte le propage au
-   *  runtime audio. */
+  /** Notified on every parameter change triggered by the user (knob drag,
+   *  preset recall, etc.). The host propagates it to the audio runtime. */
   onParamChange: (path: string, value: number) => void;
 
-  /** Optionnels — bracketing de gesture pour autosave / undo de l'hôte. */
+  /** Optional — gesture bracketing for host-side autosave / undo. */
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
 
-  /** Events sortants : le composant signale qu'il a muté son état. L'hôte
-   *  décide quoi faire (persister, broadcaster aux autres instances,
-   *  ignorer). Le payload contient l'état complet à jour, le composant
-   *  ne s'occupe pas du diff. */
+  /** Outgoing events: the component signals that it has mutated its state.
+   *  The host decides what to do (persist, broadcast to other instances,
+   *  ignore). The payload contains the full up-to-date state; the
+   *  component does not handle the diff. */
   onLibraryChange?: (records: Preset[]) => void;
   onTrajectoryChange?: (record: TrajectoryRecord) => void;
   onSelectionChange?: (entries: SelectionEntry[]) => void;
   onLoopSettingsChange?: (settings: LoopSettings) => void;
 
-  /** Events sémantiques optionnels — utiles pour analytics, badges
-   *  externes, statut. Ne se substituent pas aux `on*Change` qui restent
-   *  la source canonique des mutations. */
+  /** Optional semantic event — useful for analytics, external badges,
+   *  status. Does not replace the `on*Change` events, which remain the
+   *  canonical source of mutations. */
   onCommit?: (configuration: Readonly<Record<string, number>>) => void;
-  onPresetActivated?: (record: Preset) => void;
+
+  /** Forwarded to the internal FaustOrbitUI (bare renderer).
+   *
+   *  `tooltips` — tooltip strings injected on the toolbar buttons
+   *  (Center / Random / Zoom / hints). Lets the host localize the
+   *  labels without touching the component.
+   *
+   *  `onOrbitStateChange` — fires on every mutation of the renderer's
+   *  visual state (parameter positions, zoom, center movement). Useful
+   *  for hosts that persist orbital state cross-session or sync it to
+   *  a remote backend. Distinct from the `on*Change` events above,
+   *  which concern logical state (library, trajectory, selection,
+   *  loop) rather than visual layout. */
+  tooltips?: {
+    centerButton?: string;
+    randomButton?: string;
+    randomMix?: string;
+    zoomSelect?: string;
+    hintSlider?: string;
+    hintCenter?: string;
+    hintOuter?: string;
+  };
+  onOrbitStateChange?: (state: OrbitState) => void;
 };
 ```
 
-## Types des données échangées
+## Types of exchanged data
 
 ```typescript
 type Preset = {
   uiHash: string;
   configHash: string;
-  /** Présent → preset nommé (épinglé, permanent). Absent → anonyme,
-   *  soumis à l'éviction FIFO. */
+  /** Present → named preset (pinned, permanent). Absent → anonymous,
+   *  subject to FIFO eviction. */
   name?: string;
-  /** Mis à jour à chaque commit de cette configuration par n'importe
-   *  quelle instance. Sert au calcul du poids dans la projection PCA
-   *  (decay exponentiel) et à l'ordre de la navigation centre-step. */
+  /** Updated on each commit of this configuration by any instance.
+   *  Used to compute the weight in the PCA projection (exponential
+   *  decay) and the order of center-step navigation. */
   lastSeenAt: number;
   configuration: Readonly<Record<string, number>>;
 };
 
 type SelectionEntry = {
-  /** Position dans l'ordre d'insertion. La sélection est une liste
-   *  ordonnée ; le mode boucle parcourt selon cet ordre. */
+  /** Position in insertion order. The selection is an ordered list;
+   *  loop mode iterates according to this order. */
   position: number;
   uiHash: string;
   configHash: string;
@@ -93,10 +120,11 @@ type LoopSettings = {
 };
 
 type TrajectoryRecord = {
-  /** Hash de la signature UI à laquelle ce log se rapporte. Utilisé par
-   *  le composant pour valider qu'un `setTrajectory(record)` correspond
-   *  bien à sa signature courante (sinon il l'ignore — la signature a
-   *  changé, le log n'est plus interprétable dans le même cadre). */
+  /** Hash of the UI signature this log refers to. Used by the
+   *  component to validate that a `setTrajectory(record)` actually
+   *  matches its current signature (otherwise it is ignored — the
+   *  signature has changed, the log is no longer interpretable in
+   *  the same frame). */
   uiHash: string;
   events: TrajectoryEvent[];
   headIndex: number;
@@ -113,85 +141,167 @@ type TrajectoryEvent = {
 };
 ```
 
-## Méthodes publiques
+## Public methods
 
 ```typescript
 class OrbitUI {
-  /** Force un état des paramètres. Utilisé par l'hôte pour synchroniser
-   *  depuis le runtime Faust (e.g. après compilation et restauration des
-   *  valeurs sauvegardées). Ne déclenche pas onParamChange. */
+  /** Forces a parameter state. Used by the host to sync from the Faust
+   *  runtime (e.g. after compilation and restoration of saved values).
+   *  Does not trigger onParamChange. */
   setParams(config: Readonly<Record<string, number>>): void;
 
-  /** Remplace la library complète. Utilisé pour la sync cross-instance :
-   *  quand une autre orbit-ui de même uiHash a modifié sa library, l'hôte
-   *  pousse la nouvelle version ici. Ne déclenche pas onLibraryChange. */
+  /** Replaces the entire library. Used for cross-instance sync: when
+   *  another orbit-ui with the same uiHash has modified its library,
+   *  the host pushes the new version here. Does not trigger
+   *  onLibraryChange. */
   setLibrary(records: Preset[]): void;
 
-  /** Remplace la trajectoire complète. Rare en pratique (la trajectoire
-   *  est propre à l'instance), mais utile pour restaurer après un reload
-   *  ou pour des cas de migration. Ne déclenche pas onTrajectoryChange. */
+  /** Replaces the entire trajectory. Rare in practice (the trajectory
+   *  is instance-specific), but useful for restoring after a reload or
+   *  for migration cases. Does not trigger onTrajectoryChange. */
   setTrajectory(record: TrajectoryRecord): void;
 
-  /** Remplace la sélection multi complète (sync cross-instance).
-   *  Ne déclenche pas onSelectionChange. */
+  /** Replaces the full multi-selection (cross-instance sync).
+   *  Does not trigger onSelectionChange. */
   setSelection(entries: SelectionEntry[]): void;
 
-  /** Remplace les paramètres de boucle (tempo, transition).
-   *  Ne déclenche pas onLoopSettingsChange. */
+  /** Replaces the loop parameters (tempo, transition).
+   *  Does not trigger onLoopSettingsChange. */
   setLoopSettings(settings: LoopSettings): void;
 
-  /** Tente de défaire l'opération library la plus récente.
-   *  Retourne true si une op a été défaite, false si la pile était vide. */
+  /** Reads the current loop parameters back. The host typically uses
+   *  this when persisting settings (paired with `onLoopSettingsChange`
+   *  for the live stream of edits). */
+  getLoopSettings(): LoopSettings;
+
+  /** Suspends or resumes the dwell-based auto-promotion (PRESETSPEC §
+   *  "Memoisation"). Hosts call this to gate promotion on external
+   *  signals : audio paused, effect bypassed, the user explicitly
+   *  pinned the current state. The component already gates
+   *  promotion on its own signals (calque open, gesture in flight). */
+  setPromotionSuspended(suspended: boolean): void;
+
+  /** Attempts to undo the most recent library operation.
+   *  Returns true if an op was undone, false if the stack was empty. */
   undoLibrary(): boolean;
   redoLibrary(): boolean;
 
-  /** Tente de défaire le dernier commit de paramètres. */
+  /** Attempts to undo the last parameter commit. */
   undoParams(): boolean;
   redoParams(): boolean;
 
-  /** Détache le composant : retire les listeners DOM, libère les caches.
-   *  À appeler avant de retirer le container du DOM. */
+  /** Detaches the component: removes DOM listeners, releases caches.
+   *  Also empties the shadow root so that a reconstruction on the
+   *  same container does not stack duplicate `<style>` elements.
+   *  To be called before removing the container from the DOM. */
   destroy(): void;
+
+  // ----- Delegators to the internal renderer (FaustOrbitUI) -----
+  // Surface reserved for hosts that need to manipulate the
+  // bare-renderer layer: cross-session visual-state snapshot, remote
+  // sync of the orbital layout, batching of updates.
+
+  /** Re-measures the container and redraws. The wrapper installs its
+   *  own ResizeObserver — calling explicitly is useful after a layout
+   *  mutation that the browser does not capture. */
+  resize(): void;
+
+  /** Current zoom level as exposed by the selector. */
+  getZoom(): number;
+
+  /** Suspends / resumes `onOrbitStateChange` emissions during a batch
+   *  of mutations. Must be paired — every `beginUpdate` must be
+   *  followed by an `endUpdate`. Inherited from `FaustUICore`. */
+  beginUpdate(): void;
+  endUpdate(): void;
+
+  /** Builds a fresh OrbitState from a Faust UI descriptor, without
+   *  applying it. Typical host use: seed-then-merge with a persisted
+   *  snapshot before `setOrbitState`. */
+  buildControlsFromUnknown(input: unknown): OrbitState;
+
+  /** Full snapshot of the renderer's visual state (parameter
+   *  positions, zoom, etc.). For cross-session persistence or remote
+   *  sync. */
+  getOrbitState(): OrbitState;
+  setOrbitState(state: OrbitState): void;
+
+  /** `<div>` element that contains the canvas in the shadow root.
+   *  Hosts that need to measure its dimensions (layout recovery,
+   *  diagnostics) read it via this getter. */
+  readonly body: HTMLDivElement;
 }
 ```
 
-### Convention de retour pour `undo*` / `redo*`
+### Return convention for `undo*` / `redo*`
 
-Retourne un `boolean` :
-- `true` — une opération a été défaite / refaite ; l'hôte considère le keystroke consommé.
-- `false` — la pile était vide.
+Returns a `boolean`:
+- `true` — an operation was undone / redone; the host considers the keystroke consumed.
+- `false` — the stack was empty.
 
-L'hôte utilise ce retour pour décider du fall-through au scope parent.
+The host uses this return value to decide whether to fall through to the parent scope.
 
-### Convention de non-déclenchement des events sur les setters
+### Convention: setters do not trigger events
 
-`setParams`, `setLibrary`, `setTrajectory`, `setSelection`, `setLoopSettings` **ne déclenchent pas** les events sortants correspondants. Ces méthodes sont l'outil de synchronisation **entrante** ; émettre un event en réponse créerait des boucles de rétroaction (l'hôte écoute → persiste → notifie d'autres instances → setLibrary → si event re-émis → l'hôte persiste à nouveau, etc.).
+`setParams`, `setLibrary`, `setTrajectory`, `setSelection`, `setLoopSettings` **do not trigger** the corresponding outgoing events. These methods are the **incoming** synchronization tool; emitting an event in response would create feedback loops (host listens → persists → notifies other instances → setLibrary → if event re-emitted → host persists again, etc.).
 
-### Effet des setters sur les piles undo / redo
+### Effect of setters on the undo / redo stacks
 
-Quand l'hôte appelle un setter, l'état change de manière externe au composant. Les piles undo / redo correspondantes ne représentent plus un historique cohérent et sont **vidées** :
+When the host calls a setter, the state changes externally to the component. The corresponding undo / redo stacks no longer represent a coherent history and are **cleared**:
 
-| Setter | Pile vidée |
+| Setter | Stack cleared |
 |---|---|
-| `setParams` | pile params (undo / redo) |
-| `setLibrary` | pile library (undo / redo) |
+| `setParams` | params stack (undo / redo) |
+| `setLibrary` | library stack (undo / redo) |
 
-Pour les setters qui n'ont pas de pile dédiée (`setTrajectory`, `setSelection`, `setLoopSettings`), il n'y a rien à vider.
+For setters that have no dedicated stack (`setTrajectory`, `setSelection`, `setLoopSettings`), there is nothing to clear.
 
-### Events émis par les undo / redo
+### Events emitted by undo / redo
 
-Contrairement aux setters, les méthodes undo / redo modifient l'état **depuis l'intérieur** du composant ; les events correspondants sont donc émis pour que l'hôte persiste et synchronise aux autres instances.
+Unlike setters, the undo / redo methods modify the state **from inside** the component; the corresponding events are therefore emitted so that the host can persist and synchronize to other instances.
 
-| Méthode | Émet | N'émet pas |
+| Method | Emits | Does not emit |
 |---|---|---|
 | `undoLibrary` / `redoLibrary` | `onLibraryChange(records)` | — |
-| `undoParams` / `redoParams` | `onParamChange(path, value)` pour chaque param qui change | `onCommit`, `onTrajectoryChange` |
+| `undoParams` / `redoParams` | `onParamChange(path, value)` for each param that changes | `onCommit`, `onTrajectoryChange` |
 
-La distinction sur `undoParams` se justifie ainsi : `onParamChange` n'identifie pas un geste utilisateur mais signale qu'un paramètre a changé et doit être propagé au DSP — sa cause (drag, recall, undo) est indifférente. À l'inverse, `onCommit` et `onTrajectoryChange` sont propres à l'enregistrement d'un commit dans l'historique ; un undo/redo ne crée pas de nouvel event historique, il restaure un état antérieur déjà committé.
+The distinction for `undoParams` is justified as follows: `onParamChange` does not identify a user gesture but signals that a parameter has changed and must be propagated to the DSP — its cause (drag, recall, undo) is irrelevant. Conversely, `onCommit` and `onTrajectoryChange` are specific to recording a commit in the history; an undo/redo does not create a new historical event, it restores a previously committed state.
 
-## Routage Cmd+Z par l'hôte
+## Theming
 
-L'hôte est responsable du routage global Cmd+Z. Quand le focus est dans la zone d'orbit-ui, il appelle les méthodes du composant.
+The wrapper renders inside a shadow root, so the host's CSS selectors (`.orbit-center-btn { … }`) **do not reach** the internal elements. Visual theming goes through **CSS custom properties** declared at the `:host` scope — they cross the shadow boundary by design.
+
+The host overrides them on the container element it passes to `new OrbitUI(...)`:
+
+```css
+#orbit-root {
+  --orbit-bg: #0a1018;
+  --orbit-pill-bg: rgba(255, 255, 255, 0.06);
+  --orbit-accent-bg: #5b9bd5;
+}
+```
+
+| Custom property | Role |
+|---|---|
+| `--orbit-bg` | Canvas / main body background |
+| `--orbit-toolbar-bg` | Top toolbar + bottom detail panel background |
+| `--orbit-toolbar-line` | Separator lines + slider rail |
+| `--orbit-pill-bg` | Pill background (Center / Random / Zoom / Library / Trash / value box) |
+| `--orbit-pill-border` | Pill border |
+| `--orbit-pill-hover-bg` | Pill hover background |
+| `--orbit-fg` | Pill text, slider thumb, displayed values |
+| `--orbit-fg-muted` | Secondary labels (BPM, ms, …) |
+| `--orbit-accent-bg` | Active / pressed pill background (Library when calque is open) |
+| `--orbit-accent-fg` | Active pill text |
+| `--orbit-accent-border` | Active pill border |
+
+The default values produce the dark palette visible in the demo. Hosts that want to stay close to their design system override whatever they want.
+
+Surfaces that are not currently themable (preset disc colors on the calque, amber selection ring, etc.) remain hard-coded in the canvas — they cannot be driven via CSS. They may be added to the theming surface if the need arises.
+
+## Cmd+Z routing (host-side)
+
+The host is responsible for global Cmd+Z routing. When focus is in the orbit-ui zone, it calls the component's methods.
 
 ```typescript
 window.addEventListener("keydown", (event) => {
@@ -202,26 +312,29 @@ window.addEventListener("keydown", (event) => {
   const focused = document.activeElement;
   if (!(focused instanceof HTMLElement)) return;
 
-  if (focused.closest(".orbit-ui-overlay-active")) {
-    event.preventDefault();
-    event.stopPropagation();
+  const root = focused.closest(".orbit-ui-root");
+  if (!root) return;  // outside the orbit zone — fall-through
+
+  // The wrapper toggles `.orbit-ui-overlay-active` on the container itself
+  // when the calque opens — detectable from outside the shadow.
+  const calqueOpen = root.classList.contains("orbit-ui-overlay-active");
+  event.preventDefault();
+  event.stopPropagation();
+  if (calqueOpen) {
     if (isRedo) orbit.redoLibrary(); else orbit.undoLibrary();
-  } else if (focused.closest(".orbit-ui-root")) {
-    event.preventDefault();
-    event.stopPropagation();
+  } else {
     if (isRedo) orbit.redoParams(); else orbit.undoParams();
   }
-  // sinon → fall-through aux scopes hôte (chain, project)
 });
 ```
 
-Le composant garantit deux classes CSS sur ses sous-éléments :
-- `.orbit-ui-root` — le container racine.
-- `.orbit-ui-overlay-active` — sur le calque quand il est ouvert.
+The component guarantees two CSS classes on the `container` (host element):
+- `.orbit-ui-root` — added at construction.
+- `.orbit-ui-overlay-active` — toggled when the calque opens / closes. Detectable via `container.classList.contains(...)` (not via `querySelector` — the shadow boundary cannot be crossed).
 
-## Patterns d'usage
+## Usage patterns
 
-### Pattern 1 — sans persistance (sandbox, démo)
+### Pattern 1 — without persistence (sandbox, demo)
 
 ```typescript
 const orbit = new OrbitUI(container, {
@@ -232,9 +345,9 @@ const orbit = new OrbitUI(container, {
 orbit.setParams({ "/reverb/wet": 0.4 });
 ```
 
-Le composant tourne en plein régime : calque, auto-promotion, undo, recall menu sont tous fonctionnels. La library et la trajectoire vivent en mémoire et disparaissent au reload.
+The component runs at full capacity: calque, auto-promotion, undo, recall menu are all functional. The library and trajectory live in memory and disappear on reload.
 
-### Pattern 2 — avec persistance IDB
+### Pattern 2 — with IDB persistence
 
 ```typescript
 async function mountOrbitUI(container, runtime, sessionId, instanceId) {
@@ -257,7 +370,7 @@ async function mountOrbitUI(container, runtime, sessionId, instanceId) {
     },
   });
 
-  // Le composant a calculé son uiHash. On lit notre store et on pousse.
+  // The component has computed its uiHash. We read our store and push.
   const [library, trajectory, selection, loopSettings] = await Promise.all([
     idb.loadLibrary(orbit.uiHash),
     idb.loadTrajectory(sessionId, instanceId),
@@ -269,8 +382,8 @@ async function mountOrbitUI(container, runtime, sessionId, instanceId) {
   if (selection) orbit.setSelection(selection);
   if (loopSettings) orbit.setLoopSettings(loopSettings);
 
-  // Sync cross-instance : si une autre instance modifie la library, on
-  // recharge depuis IDB et on pousse au composant.
+  // Cross-instance sync: if another instance modifies the library,
+  // we reload from IDB and push to the component.
   libraryChannel.addEventListener("message", async (msg) => {
     if (msg.data.type === "library" && msg.data.uiHash === orbit.uiHash) {
       orbit.setLibrary(await idb.loadLibrary(orbit.uiHash));
@@ -281,73 +394,74 @@ async function mountOrbitUI(container, runtime, sessionId, instanceId) {
 }
 ```
 
-L'hôte gère la persistance, le keying par `(sessionId, instanceId)`, et la sync cross-instance. Le composant n'en sait rien — il reçoit / émet juste des `TrajectoryRecord` opaques.
+The host handles persistence, keying by `(sessionId, instanceId)`, and cross-instance sync. The component knows nothing about it — it just receives / emits opaque `TrajectoryRecord` values.
 
-### Pattern 3 — plusieurs instances, même uiHash
+### Pattern 3 — multiple instances, same uiHash
 
-Lorsqu'on a deux orbit-ui distincts qui partagent la même signature, chacun gère son état indépendamment. La synchronisation passe par l'hôte (BroadcastChannel, IDB observer, etc.) qui appelle `setLibrary` sur chaque instance après la mutation d'une autre.
+When two distinct orbit-ui instances share the same signature, each manages its own state independently. Synchronization goes through the host (BroadcastChannel, IDB observer, etc.), which calls `setLibrary` on each instance after a mutation by another.
 
 ```typescript
 const o1 = await mountOrbitUI(container1, runtime1, sessionId, "fx-1");
-const o2 = await mountOrbitUI(container2, runtime1, sessionId, "fx-2"); // même runtime, donc même uiHash
+const o2 = await mountOrbitUI(container2, runtime1, sessionId, "fx-2"); // same runtime, hence same uiHash
 
-// Si l'utilisateur sauvegarde un preset dans o1, l'event onLibraryChange
-// est émis. mountOrbitUI persiste en IDB et broadcast. o2 reçoit le
-// broadcast, recharge depuis IDB, et appelle setLibrary — sa library
-// est synchronisée.
+// If the user saves a preset in o1, the onLibraryChange event is
+// emitted. mountOrbitUI persists to IDB and broadcasts. o2 receives
+// the broadcast, reloads from IDB, and calls setLibrary — its
+// library is synchronized.
 ```
 
-## Convention d'erreurs
+## Error conventions
 
-Le composant lui-même est synchrone et ne lève pas d'erreurs sur l'API publique. Les erreurs côté **hôte** (échec d'écriture IDB dans `onLibraryChange`, etc.) sont sa responsabilité — il peut les capturer dans son callback et les gérer comme il veut (retry, statut UI, log).
+The component itself is synchronous and does not throw errors on the public API. Errors on the **host** side (IDB write failure in `onLibraryChange`, etc.) are its responsibility — it can catch them in its callback and handle them however it wants (retry, UI status, log).
 
-Si l'hôte appelle un setter avec un état invalide (par exemple un `Preset` mal formé, un `TrajectoryRecord` dont l'`uiHash` ne correspond pas à la signature courante, etc.), le composant filtre / ignore silencieusement plutôt que de jeter, pour ne pas crasher l'app.
+If the host calls a setter with an invalid state (e.g. a malformed `Preset`, a `TrajectoryRecord` whose `uiHash` does not match the current signature, etc.), the component silently filters / ignores rather than throwing, so as not to crash the app.
 
-## Cycle de vie
+## Lifecycle
 
 ```
-┌─ L'hôte compile l'effet Faust → obtient runtime.ui
+┌─ The host compiles the Faust effect → obtains runtime.ui
 │
 ├─ new OrbitUI(container, { uiDescriptor, …, onLibraryChange })
-│   • le composant calcule uiHash (depuis runtime.ui), exposé via orbit.uiHash
-│   • il démarre avec library / trajectoire / sélection / loopSettings vides
-│   • il rend canvas + header + détail
+│   • the component computes uiHash (from runtime.ui), exposed via orbit.uiHash
+│   • it starts with empty library / trajectory / selection / loopSettings
+│   • it renders canvas + header + detail
 │
-├─ L'hôte lit son store en utilisant orbit.uiHash et pousse l'état :
+├─ The host reads its store using orbit.uiHash and pushes the state:
 │   • orbit.setLibrary(records)
 │   • orbit.setTrajectory(record)
 │   • orbit.setSelection(entries)
 │   • orbit.setLoopSettings(settings)
-│   (ces setters ne déclenchent pas les events sortants)
+│   (these setters do not trigger outgoing events)
 │
-├─ Boucle d'usage :
+├─ Usage loop:
 │   • drags → onParamChange → host node.setParamValue
 │   • commits → onCommit, onTrajectoryChange (host persists), auto-promotion
 │   • promotion → onLibraryChange (host persists + broadcasts)
-│   • broadcast d'une autre instance → host calls setLibrary(records)
-│   • Cmd+Z dans le calque → host calls orbit.undoLibrary() → si retour
-│     true, l'event est consommé ; sinon fall-through au scope parent
+│   • broadcast from another instance → host calls setLibrary(records)
+│   • Cmd+Z in the calque → host calls orbit.undoLibrary() → if it
+│     returns true, the event is consumed; otherwise fall-through to
+│     the parent scope
 │
 └─ orbit.destroy()
-    • retire les listeners DOM
-    • clear caches internes
+    • removes DOM listeners
+    • clears internal caches
 ```
 
-## Ce qui n'est PAS dans l'API
+## What is NOT in the API
 
-Ces concepts sont volontairement absents pour respecter la frontière :
+These concepts are deliberately absent in order to respect the boundary:
 
-- **Pas de pilotage du calque** par l'hôte (pas de `showOverlay`, `selectPreset`). Le calque est entièrement piloté par l'utilisateur via les contrôles internes.
-- **Pas d'accès aux undo internes** au-delà des méthodes `undo*` / `redo*`. L'hôte ne peut pas inspecter la pile, ni y pousser des ops.
-- **Pas de méthode CRUD library** depuis l'hôte (`addPreset`, `deletePreset`). Toute mutation de la library est interne au composant ; l'hôte la voit via `onLibraryChange`.
-- **Pas de manipulation de la signature UI** après construction. Si la signature change, l'hôte détruit l'instance et en crée une nouvelle.
-- **Pas de persistance interne**. Le composant ne sait pas si IDB existe. L'hôte écoute les events et fait ce qu'il veut.
+- **No host-side calque control** (no `showOverlay`, `selectPreset`). The calque is fully driven by the user via the internal controls.
+- **No access to internal undos** beyond the `undo*` / `redo*` methods. The host cannot inspect the stack, nor push ops onto it.
+- **No library CRUD method** from the host (`addPreset`, `deletePreset`). All library mutations are internal to the component; the host sees them via `onLibraryChange`.
+- **No manipulation of the UI signature** after construction. If the signature changes, the host destroys the instance and creates a new one.
+- **No internal persistence**. The component does not know whether IDB exists. The host listens to events and does whatever it wants.
 
-## Hors-scope de la spec
+## Out of scope
 
-- **Format exact du `FaustUIDescriptor`** — défini par le projet Faust.
-- **Algorithme de calcul de `uiHash` et `configHash`** — déterministe, défini en interne.
-- **Schéma de stockage IDB de l'hôte** — l'affaire de l'hôte.
-- **Mécanisme de synchronisation cross-instance** — choix de l'hôte (BroadcastChannel, polling, WebSocket, etc.).
-- **Algorithmes de projection PCA / Shepard / interpolation** — couverts par PRESETSPEC.
-- **Routage Cmd+Z global** — l'hôte décide.
+- **Exact format of `FaustUIDescriptor`** — defined by the Faust project.
+- **Algorithm for computing `uiHash` and `configHash`** — deterministic, defined internally.
+- **The host's IDB storage schema** — the host's business.
+- **Cross-instance synchronization mechanism** — host's choice (BroadcastChannel, polling, WebSocket, etc.).
+- **PCA / Shepard / interpolation projection algorithms** — covered by PRESETSPEC.
+- **Global Cmd+Z routing** — host's decision.
